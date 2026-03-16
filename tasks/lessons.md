@@ -40,3 +40,16 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 5 | Process | PASS on first reviewer cycle — no MAJOR/CRITICAL issues |
 
 ---
+
+## Phase 3 — Diagnostician
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Reviewer catch | Test suite did not verify the `Authorization` header was sent on the outgoing HTTP request. A regression dropping credentials would have been invisible. Pattern: httptest handlers should always assert auth headers on security-sensitive calls |
+| 2 | Reviewer catch | Test suite did not verify request body `model` field. Model name regressions should be caught at test time |
+| 3 | Design | `baseURL` field on struct (defaulting to `"https://api.deepseek.com"`) is the right pattern for making raw HTTP clients testable without mocking the whole `http.Client` |
+| 4 | Design | Non-remediable diagnosis returns `(*Diagnosis, nil)` — not an error. The escalation is a valid outcome, not a failure. Important distinction for caller logic |
+| 5 | Design | Code-fence stripping needed because DeepSeek sometimes wraps JSON in ` ```json ``` ` despite explicit instructions. Applied via `TrimSpace` + `TrimPrefix`/`TrimSuffix` |
+| 6 | Coder iteration | One reviewer cycle (FAIL → fix → PASS). MAJOR issue was a missing security assertion in tests |
+
+---

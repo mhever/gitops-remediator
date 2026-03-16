@@ -80,13 +80,19 @@ func main() {
 		c = col
 	}
 
-	var d diagnostician.Diagnostician = &diagnostician.NoopDiagnostician{}
+	diag := diagnostician.NewDeepSeekDiagnostician(
+		cfg.DeepSeekAPIKey,
+		cfg.DiagnosticianLogPath,
+		nil,
+		slog.Default(),
+	)
+	_ = diag // used in Phase 4
+
 	var p patcher.Patcher = &patcher.NoopPatcher{}
 	var g gitops.GitOps = &gitops.NoopGitOps{}
 
 	// Suppress "declared and not used" — stubs will be wired in later phases.
 	_ = c
-	_ = d
 	_ = p
 	_ = g
 
