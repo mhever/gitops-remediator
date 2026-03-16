@@ -39,6 +39,7 @@ func main() {
 	// Try to build a k8s client. Fall back to NoopWatcher if unavailable (e.g. in CI).
 	var w watcher.Watcher
 	var evCh chan watcher.FailureEvent
+	var k8sClient kubernetes.Interface
 	isK8sWatcher := false
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
@@ -49,11 +50,12 @@ func main() {
 		slog.Warn("could not build k8s client config, using NoopWatcher", "error", err)
 		w = &watcher.NoopWatcher{}
 	} else {
-		k8sClient, err := kubernetes.NewForConfig(restCfg)
-		if err != nil {
-			slog.Warn("could not create k8s client, using NoopWatcher", "error", err)
+		client, clientErr := kubernetes.NewForConfig(restCfg)
+		if clientErr != nil {
+			slog.Warn("could not create k8s client, using NoopWatcher", "error", clientErr)
 			w = &watcher.NoopWatcher{}
 		} else {
+			k8sClient = client
 			evCh = make(chan watcher.FailureEvent, 100)
 			w = watcher.NewK8sWatcher(k8sClient, cfg.Namespace, evCh, slog.Default())
 			isK8sWatcher = true
@@ -72,6 +74,12 @@ func main() {
 	}
 
 	var c collector.Collector = &collector.NoopCollector{}
+	if isK8sWatcher {
+		col := collector.NewK8sCollector(k8sClient, slog.Default())
+		_ = col // used in Phase 3
+		c = col
+	}
+
 	var d diagnostician.Diagnostician = &diagnostician.NoopDiagnostician{}
 	var p patcher.Patcher = &patcher.NoopPatcher{}
 	var g gitops.GitOps = &gitops.NoopGitOps{}

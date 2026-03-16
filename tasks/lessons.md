@@ -28,3 +28,15 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 5 | Environment | k8s.io dependencies resolved to v0.35.2 despite specifying v0.34.3 — `go mod tidy` always resolves to the highest compatible available version |
 
 ---
+
+## Phase 2 — Collector
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Reviewer MINOR | `sanitize()` does not redact `EphemeralContainers` env vars — rare in practice but worth completing in a future pass |
+| 2 | Reviewer MINOR | `EnvFrom` (bulk env from ConfigMap/Secret) not redacted — the field contains names only, not values, so no secret data leaks; acceptable |
+| 3 | Design | Bundle rendered as structured plain text (not JSON) — LLMs read it better; same lesson from homelab-mcp confirmed here |
+| 4 | Coder deviation | `k8sClient` hoisted to outer scope in main.go to make it accessible for collector wiring — correct approach, not a real deviation |
+| 5 | Process | PASS on first reviewer cycle — no MAJOR/CRITICAL issues |
+
+---

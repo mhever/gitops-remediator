@@ -77,4 +77,4 @@ If a subagent step fails **twice consecutively** on the same task, **stop**. Do 
 
 ## Current Phase
 
-**Phase 1 — Watcher** (started 2026-03-16)
+**Phase 2 — Collector** (started 2026-03-16)
