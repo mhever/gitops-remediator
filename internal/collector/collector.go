@@ -81,13 +81,7 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 
 	// === POD SPEC (sanitized) ===
 	fmt.Fprintf(&buf, "=== POD SPEC (sanitized) ===\n")
-	specYAML, err := sigsyaml.Marshal(sanitizedPod.Spec)
-	if err != nil {
-		c.logger.Warn("failed to marshal pod spec", "pod", podName, "error", err)
-		fmt.Fprintf(&buf, "<marshal error: %v>\n", err)
-	} else {
-		buf.WriteString(string(specYAML))
-	}
+	buf.WriteString(c.sectionPodSpec(sanitizedPod, podName))
 	fmt.Fprintf(&buf, "\n")
 
 	// === POD STATUS ===
@@ -125,27 +119,7 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 
 	// === RECENT EVENTS (last 5) ===
 	fmt.Fprintf(&buf, "=== RECENT EVENTS (last 5) ===\n")
-	eventList, err := c.client.CoreV1().Events(ns).List(ctx, metav1.ListOptions{
-		FieldSelector: "involvedObject.name=" + podName,
-	})
-	if err != nil {
-		c.logger.Warn("failed to list events", "pod", podName, "error", err)
-		fmt.Fprintf(&buf, "  <error fetching events: %v>\n", err)
-	} else {
-		events := eventList.Items
-		// Sort by LastTimestamp descending.
-		sort.Slice(events, func(i, j int) bool {
-			return events[i].LastTimestamp.After(events[j].LastTimestamp.Time)
-		})
-		limit := 5
-		if len(events) < limit {
-			limit = len(events)
-		}
-		for _, ev := range events[:limit] {
-			ts := ev.LastTimestamp.UTC().Format("2006-01-02T15:04:05Z")
-			fmt.Fprintf(&buf, "  %s  %s  %s  %s\n", ts, ev.Type, ev.Reason, ev.Message)
-		}
-	}
+	buf.WriteString(c.sectionEvents(ctx, ns, podName))
 	fmt.Fprintf(&buf, "\n")
 
 	// === CONTAINER LOGS (last 100 lines) ===
@@ -154,16 +128,58 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 	containerNames := collectContainerNames(event.ContainerName, pod)
 	for _, cname := range containerNames {
 		fmt.Fprintf(&buf, "--- %s ---\n", cname)
-		logs, err := c.fetchLogs(ctx, ns, podName, cname)
-		if err != nil {
-			c.logger.Warn("failed to fetch logs", "pod", podName, "container", cname, "error", err)
-			fmt.Fprintf(&buf, "<log fetch error: %v>\n", err)
-		} else {
-			buf.WriteString(logs)
-		}
+		buf.WriteString(c.sectionContainerLogs(ctx, ns, podName, cname))
 	}
 
 	return &DiagnosticBundle{Content: buf.String()}, nil
+}
+
+// sectionPodSpec marshals the sanitised pod spec to YAML.
+// Returns a placeholder string on error.
+func (c *K8sCollector) sectionPodSpec(pod *corev1.Pod, podName string) string {
+	specYAML, err := sigsyaml.Marshal(pod.Spec)
+	if err != nil {
+		c.logger.Warn("failed to marshal pod spec", "pod", podName, "error", err)
+		return fmt.Sprintf("<marshal error: %v>\n", err)
+	}
+	return string(specYAML)
+}
+
+// sectionEvents fetches and formats the last 5 events for a pod.
+// Returns a placeholder string on error.
+func (c *K8sCollector) sectionEvents(ctx context.Context, ns, podName string) string {
+	eventList, err := c.client.CoreV1().Events(ns).List(ctx, metav1.ListOptions{
+		FieldSelector: "involvedObject.name=" + podName,
+	})
+	if err != nil {
+		c.logger.Warn("failed to list events", "pod", podName, "error", err)
+		return fmt.Sprintf("  <error fetching events: %v>\n", err)
+	}
+	events := eventList.Items
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].LastTimestamp.After(events[j].LastTimestamp.Time)
+	})
+	limit := 5
+	if len(events) < limit {
+		limit = len(events)
+	}
+	var sb strings.Builder
+	for _, ev := range events[:limit] {
+		ts := ev.LastTimestamp.UTC().Format("2006-01-02T15:04:05Z")
+		fmt.Fprintf(&sb, "  %s  %s  %s  %s\n", ts, ev.Type, ev.Reason, ev.Message)
+	}
+	return sb.String()
+}
+
+// sectionContainerLogs fetches and returns the last 100 lines of logs for a container.
+// Returns a placeholder string on error.
+func (c *K8sCollector) sectionContainerLogs(ctx context.Context, ns, podName, cname string) string {
+	logs, err := c.fetchLogs(ctx, ns, podName, cname)
+	if err != nil {
+		c.logger.Warn("failed to fetch logs", "pod", podName, "container", cname, "error", err)
+		return fmt.Sprintf("<log fetch error: %v>\n", err)
+	}
+	return logs
 }
 
 // collectContainerNames returns a list of container names to fetch logs for.

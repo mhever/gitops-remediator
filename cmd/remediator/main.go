@@ -25,6 +25,52 @@ import (
 	"github.com/mhever/gitops-remediator/internal/watcher"
 )
 
+// k8sSetup holds all components that require a live Kubernetes client.
+type k8sSetup struct {
+	w      watcher.Watcher
+	evCh   chan watcher.FailureEvent
+	col    collector.Collector
+	diag   diagnostician.Diagnostician
+	isLive bool // false when falling back to noop implementations
+}
+
+// buildK8sSetup attempts to build a live Kubernetes client and wire all
+// k8s-dependent components. Falls back to noop implementations on any error.
+// Config resolution order: in-cluster -> $KUBECONFIG env var -> ~/.kube/config (clientcmd default)
+func buildK8sSetup(cfg *config.Config) k8sSetup {
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		restCfg, err = clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
+	}
+	if err != nil {
+		slog.Warn("could not build k8s client config, using noop implementations", "error", err)
+		return k8sSetup{
+			w:    &watcher.NoopWatcher{},
+			col:  &collector.NoopCollector{},
+			diag: &diagnostician.NoopDiagnostician{},
+		}
+	}
+
+	k8sClient, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		slog.Warn("could not create k8s client, using noop implementations", "error", err)
+		return k8sSetup{
+			w:    &watcher.NoopWatcher{},
+			col:  &collector.NoopCollector{},
+			diag: &diagnostician.NoopDiagnostician{},
+		}
+	}
+
+	evCh := make(chan watcher.FailureEvent, 100)
+	return k8sSetup{
+		w:      watcher.NewK8sWatcher(k8sClient, cfg.Namespace, evCh, slog.Default()),
+		evCh:   evCh,
+		col:    collector.NewK8sCollector(k8sClient, slog.Default()),
+		diag:   diagnostician.NewOpenRouterDiagnostician(cfg.OpenRouterAPIKey, cfg.DiagnosticianLogPath, nil, slog.Default()),
+		isLive: true,
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
@@ -50,44 +96,7 @@ func main() {
 		}
 	}()
 
-	// Default to noop implementations; overridden below if k8s is available.
-	var col collector.Collector = &collector.NoopCollector{}
-	var diag diagnostician.Diagnostician = &diagnostician.NoopDiagnostician{}
-
-	// Try to build a k8s client. Fall back to NoopWatcher if unavailable (e.g. in CI).
-	// Config resolution order: in-cluster -> $KUBECONFIG env var -> ~/.kube/config (clientcmd default)
-	var w watcher.Watcher
-	var evCh chan watcher.FailureEvent
-	var k8sClient kubernetes.Interface
-	isK8sWatcher := false
-	restCfg, err := rest.InClusterConfig()
-	if err != nil {
-		kubeconfigPath := os.Getenv("KUBECONFIG")
-		restCfg, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
-	}
-	if err != nil {
-		slog.Warn("could not build k8s client config, using NoopWatcher", "error", err)
-		w = &watcher.NoopWatcher{}
-	} else {
-		client, clientErr := kubernetes.NewForConfig(restCfg)
-		if clientErr != nil {
-			slog.Warn("could not create k8s client, using NoopWatcher", "error", clientErr)
-			w = &watcher.NoopWatcher{}
-		} else {
-			k8sClient = client
-			evCh = make(chan watcher.FailureEvent, 100)
-			w = watcher.NewK8sWatcher(k8sClient, cfg.Namespace, evCh, slog.Default())
-			isK8sWatcher = true
-
-			col = collector.NewK8sCollector(k8sClient, slog.Default())
-			diag = diagnostician.NewDeepSeekDiagnostician(
-				cfg.DeepSeekAPIKey,
-				cfg.DiagnosticianLogPath,
-				nil,
-				slog.Default(),
-			)
-		}
-	}
+	setup := buildK8sSetup(cfg)
 
 	p := patcher.NewManifestPatcher()
 	g := gitops.NewGitHubGitOps(cfg.GitOpsRepo, cfg.GitHubToken, p, slog.Default())
@@ -96,11 +105,11 @@ func main() {
 	defer stop()
 
 	var pipelineWg sync.WaitGroup
-	if isK8sWatcher {
+	if setup.isLive {
 		pipelineWg.Add(1)
 		go func() {
 			defer pipelineWg.Done()
-			for e := range evCh {
+			for e := range setup.evCh {
 				slog.Info("failure event detected",
 					"type", e.FailureType,
 					"namespace", e.Namespace,
@@ -111,14 +120,14 @@ func main() {
 
 				metrics.FailuresDetected.WithLabelValues(string(e.FailureType)).Inc()
 
-				bundle, err := col.Collect(ctx, e)
+				bundle, err := setup.col.Collect(ctx, e)
 				if err != nil {
 					slog.Error("collector failed", "error", err, "pod", e.PodName)
 					continue
 				}
 
 				start := time.Now()
-				diagnosis, err := diag.Diagnose(ctx, *bundle)
+				diagnosis, err := setup.diag.Diagnose(ctx, *bundle)
 				metrics.DiagnosticianLatency.Observe(time.Since(start).Seconds())
 				if err != nil {
 					slog.Error("diagnostician failed", "error", err, "pod", e.PodName)
@@ -157,9 +166,9 @@ func main() {
 		}
 	}()
 
-	runErr := w.Run(ctx)
-	if isK8sWatcher {
-		close(evCh)
+	runErr := setup.w.Run(ctx)
+	if setup.isLive {
+		close(setup.evCh)
 	}
 	pipelineWg.Wait()
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) {

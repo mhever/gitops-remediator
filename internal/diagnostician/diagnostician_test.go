@@ -26,11 +26,11 @@ func TestNoopDiagnostician_DiagnoseReturnsNonNilDiagnosis(t *testing.T) {
 	}
 }
 
-// newTestDiagnostician creates a DeepSeekDiagnostician pointing at the given test server URL.
-func newTestDiagnostician(t *testing.T, serverURL string) *DeepSeekDiagnostician {
+// newTestDiagnostician creates an OpenRouterDiagnostician pointing at the given test server URL.
+func newTestDiagnostician(t *testing.T, serverURL string) *OpenRouterDiagnostician {
 	t.Helper()
 	logPath := t.TempDir() + "/diag.log"
-	d := NewDeepSeekDiagnostician("test-api-key", logPath, nil, slog.Default())
+	d := NewOpenRouterDiagnostician("test-api-key", logPath, nil, slog.Default())
 	d.baseURL = serverURL
 	return d
 }
@@ -49,7 +49,7 @@ func makeChatResponse(content string, promptTokens, completionTokens, totalToken
 	return b
 }
 
-func TestDeepSeekDiagnostician_SuccessRemediable(t *testing.T) {
+func TestOpenRouterDiagnostician_SuccessRemediable(t *testing.T) {
 	diagJSON := `{
 		"failure_type": "OOMKilled",
 		"root_cause": "container exceeded memory limit",
@@ -73,7 +73,7 @@ func TestDeepSeekDiagnostician_SuccessRemediable(t *testing.T) {
 			http.Error(w, "bad body", http.StatusBadRequest)
 			return
 		}
-		if req.Model != "deepseek-reasoner" {
+		if req.Model != "deepseek/deepseek-r1" {
 			http.Error(w, "wrong model", http.StatusBadRequest)
 			return
 		}
@@ -120,7 +120,7 @@ func TestDeepSeekDiagnostician_SuccessRemediable(t *testing.T) {
 	}
 }
 
-func TestDeepSeekDiagnostician_SuccessNonRemediable(t *testing.T) {
+func TestOpenRouterDiagnostician_SuccessNonRemediable(t *testing.T) {
 	diagJSON := `{
 		"failure_type": "CrashLoopBackOff",
 		"root_cause": "application panic in main goroutine",
@@ -151,7 +151,7 @@ func TestDeepSeekDiagnostician_SuccessNonRemediable(t *testing.T) {
 	}
 }
 
-func TestDeepSeekDiagnostician_NonRemediable_NoError(t *testing.T) {
+func TestOpenRouterDiagnostician_NonRemediable_NoError(t *testing.T) {
 	diagJSON := `{
 		"failure_type": "ImagePullBackOff",
 		"root_cause": "image registry authentication failure",
@@ -176,7 +176,7 @@ func TestDeepSeekDiagnostician_NonRemediable_NoError(t *testing.T) {
 	}
 }
 
-func TestDeepSeekDiagnostician_APIError(t *testing.T) {
+func TestOpenRouterDiagnostician_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"error": "internal server error"}`))
@@ -195,7 +195,7 @@ func TestDeepSeekDiagnostician_APIError(t *testing.T) {
 	}
 }
 
-func TestDeepSeekDiagnostician_MalformedJSON(t *testing.T) {
+func TestOpenRouterDiagnostician_MalformedJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -212,7 +212,7 @@ func TestDeepSeekDiagnostician_MalformedJSON(t *testing.T) {
 	}
 }
 
-func TestDeepSeekDiagnostician_CodeFenceStripping(t *testing.T) {
+func TestOpenRouterDiagnostician_CodeFenceStripping(t *testing.T) {
 	diagJSON := `{
 		"failure_type": "OOMKilled",
 		"root_cause": "container exceeded memory limit",

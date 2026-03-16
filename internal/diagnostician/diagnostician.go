@@ -25,7 +25,7 @@ type Diagnosis struct {
 	ReasoningSummary string `json:"reasoning_summary"`
 }
 
-// Diagnostician sends a DiagnosticBundle to DeepSeek R1 and returns a Diagnosis.
+// Diagnostician sends a DiagnosticBundle to an LLM via OpenRouter and returns a Diagnosis.
 type Diagnostician interface {
 	Diagnose(ctx context.Context, bundle collector.DiagnosticBundle) (*Diagnosis, error)
 }
@@ -40,37 +40,40 @@ func (n *NoopDiagnostician) Diagnose(ctx context.Context, bundle collector.Diagn
 	return &Diagnosis{}, nil
 }
 
-// DeepSeekDiagnostician calls DeepSeek R1 via the OpenAI-compatible API.
-type DeepSeekDiagnostician struct {
+// OpenRouterDiagnostician calls DeepSeek R1 via the OpenRouter OpenAI-compatible API.
+type OpenRouterDiagnostician struct {
 	apiKey     string
 	logPath    string
 	httpClient *http.Client
 	logger     *slog.Logger
-	// baseURL is the base URL for the DeepSeek API. Defaults to "https://api.deepseek.com".
+	// baseURL is the base URL for the OpenRouter API. Defaults to "https://openrouter.ai/api/v1".
 	// Override in tests via a constructor option or by setting the field directly.
 	baseURL string
+	// model is the model identifier to use. Defaults to "deepseek/deepseek-r1".
+	model string
 }
 
-// NewDeepSeekDiagnostician creates a new DeepSeekDiagnostician.
+// NewOpenRouterDiagnostician creates a new OpenRouterDiagnostician.
 // httpClient may be nil, in which case a default client with 120s timeout is used.
-func NewDeepSeekDiagnostician(apiKey, logPath string, httpClient *http.Client, logger *slog.Logger) *DeepSeekDiagnostician {
+func NewOpenRouterDiagnostician(apiKey, logPath string, httpClient *http.Client, logger *slog.Logger) *OpenRouterDiagnostician {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 120 * time.Second}
 	}
-	return &DeepSeekDiagnostician{
+	return &OpenRouterDiagnostician{
 		apiKey:     apiKey,
 		logPath:    logPath,
 		httpClient: httpClient,
 		logger:     logger,
-		baseURL:    "https://api.deepseek.com",
+		baseURL:    "https://openrouter.ai/api/v1",
+		model:      "deepseek/deepseek-r1",
 	}
 }
 
-var _ Diagnostician = (*DeepSeekDiagnostician)(nil)
+var _ Diagnostician = (*OpenRouterDiagnostician)(nil)
 
-// Diagnose sends the bundle to DeepSeek R1 and returns a structured Diagnosis.
+// Diagnose sends the bundle to DeepSeek R1 via OpenRouter and returns a structured Diagnosis.
 // It logs the full prompt and response to logPath before returning.
-func (d *DeepSeekDiagnostician) Diagnose(ctx context.Context, bundle collector.DiagnosticBundle) (*Diagnosis, error) {
+func (d *OpenRouterDiagnostician) Diagnose(ctx context.Context, bundle collector.DiagnosticBundle) (*Diagnosis, error) {
 	userPrompt := fmt.Sprintf(userPromptTemplate, bundle.Content)
 
 	// Build the full prompt string for logging.
@@ -78,7 +81,7 @@ func (d *DeepSeekDiagnostician) Diagnose(ctx context.Context, bundle collector.D
 	d.diagLog("PROMPT", fullPromptForLog, "")
 
 	reqBody := chatRequest{
-		Model: "deepseek-reasoner",
+		Model: d.model,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -97,6 +100,8 @@ func (d *DeepSeekDiagnostician) Diagnose(ctx context.Context, bundle collector.D
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+d.apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/mhever/gitops-remediator")
+	httpReq.Header.Set("X-Title", "gitops-remediator")
 
 	httpResp, err := d.httpClient.Do(httpReq)
 	if err != nil {

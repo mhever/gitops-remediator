@@ -80,19 +80,19 @@ func classifyEvent(event *corev1.Event) *FailureEvent {
 	case "OOMKilling":
 		ft = FailureTypeOOMKilled
 	case "BackOff":
-		if strings.Contains(msg, "pulling image") {
+		switch {
+		case strings.Contains(msg, "pulling image"):
 			ft = FailureTypeImagePullBackOff
-		} else if strings.Contains(msg, "restarting failed container") {
+		case strings.Contains(msg, "restarting failed container"):
 			ft = FailureTypeCrashLoopBackOff
-		} else {
+		default:
 			return nil
 		}
 	case "Failed":
-		if strings.Contains(msg, "pull") {
-			ft = FailureTypeImagePullBackOff
-		} else {
+		if !strings.Contains(msg, "pull") {
 			return nil
 		}
+		ft = FailureTypeImagePullBackOff
 	default:
 		return nil
 	}

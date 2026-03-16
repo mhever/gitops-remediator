@@ -1,6 +1,6 @@
 package diagnostician
 
-// chatRequest is the request body for the DeepSeek chat completions API.
+// chatRequest is the request body for the OpenRouter chat completions API.
 type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
@@ -11,7 +11,7 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 
-// chatResponse is the response from the DeepSeek chat completions API.
+// chatResponse is the response from the OpenRouter chat completions API.
 type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`

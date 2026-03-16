@@ -22,7 +22,7 @@ Rules:
 - patch_value for env_var must be in the format "KEY=VALUE"
 - Return ONLY the JSON object. No other text.`
 
-// userPromptTemplate is the template for the user message sent to DeepSeek.
+// userPromptTemplate is the template for the user message sent to the LLM.
 // The bundle content is inserted at the placeholder.
 const userPromptTemplate = `Analyze this Kubernetes diagnostic bundle and return the JSON diagnosis:
 

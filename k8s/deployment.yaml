@@ -21,11 +21,11 @@ spec:
             - configMapRef:
                 name: gitops-remediator-config
           env:
-            - name: DEEPSEEK_API_KEY
+            - name: OPENROUTER_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: gitops-remediator-secrets
-                  key: deepseek-api-key
+                  key: openrouter-api-key
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:

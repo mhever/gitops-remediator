@@ -147,12 +147,11 @@ func applyImageTag(content []byte, containerName, newTag string) ([]byte, error)
 					prefix := line[:colon]
 					imageValue := strings.TrimSpace(line[colon+len("image:"):])
 					lastColon := strings.LastIndex(imageValue, ":")
-					var newImageValue string
-					if lastColon == -1 {
-						newImageValue = imageValue + ":" + newTag
-					} else {
-						newImageValue = imageValue[:lastColon] + ":" + newTag
+					repo := imageValue
+					if lastColon != -1 {
+						repo = imageValue[:lastColon]
 					}
+					newImageValue := repo + ":" + newTag
 					lines[i] = prefix + "image: " + newImageValue
 					return []byte(strings.Join(lines, "\n")), nil
 				}
@@ -169,12 +168,11 @@ func applyImageTag(content []byte, containerName, newTag string) ([]byte, error)
 			prefix := line[:colon]
 			imageValue := strings.TrimSpace(line[colon+len("image:"):])
 			lastColon := strings.LastIndex(imageValue, ":")
-			var newImageValue string
-			if lastColon == -1 {
-				newImageValue = imageValue + ":" + newTag
-			} else {
-				newImageValue = imageValue[:lastColon] + ":" + newTag
+			repo := imageValue
+			if lastColon != -1 {
+				repo = imageValue[:lastColon]
 			}
+			newImageValue := repo + ":" + newTag
 			lines[i] = prefix + "image: " + newImageValue
 			return []byte(strings.Join(lines, "\n")), nil
 		}
