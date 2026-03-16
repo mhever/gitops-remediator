@@ -50,15 +50,15 @@ func setupBareRepo(t *testing.T) string {
 	srcPath := t.TempDir()
 
 	// Init bare repo
-	if _, err := runGit(ctx, "", "init", "--bare", "--initial-branch=main", remotePath); err != nil {
+	if _, err := runGit(ctx, "", nil, "init", "--bare", "--initial-branch=main", remotePath); err != nil {
 		// Try without --initial-branch (older git)
-		if _, err2 := runGit(ctx, "", "init", "--bare", remotePath); err2 != nil {
+		if _, err2 := runGit(ctx, "", nil, "init", "--bare", remotePath); err2 != nil {
 			t.Fatalf("git init --bare: %v", err)
 		}
 	}
 
 	// Clone from bare remote into srcPath
-	if _, err := runGit(ctx, "", "clone", remotePath, srcPath); err != nil {
+	if _, err := runGit(ctx, "", nil, "clone", remotePath, srcPath); err != nil {
 		t.Fatalf("git clone: %v", err)
 	}
 
@@ -78,17 +78,17 @@ func setupBareRepo(t *testing.T) string {
 	}
 
 	// Initial commit and push
-	if _, err := runGit(ctx, srcPath, "add", "."); err != nil {
+	if _, err := runGit(ctx, srcPath, nil, "add", "."); err != nil {
 		t.Fatalf("git add: %v", err)
 	}
-	if _, err := runGit(ctx, srcPath,
+	if _, err := runGit(ctx, srcPath, nil,
 		"-c", "user.email=test@test",
 		"-c", "user.name=test",
 		"commit", "-m", "initial",
 	); err != nil {
 		t.Fatalf("git commit: %v", err)
 	}
-	if _, err := runGit(ctx, srcPath, "push", "origin", "HEAD:main"); err != nil {
+	if _, err := runGit(ctx, srcPath, nil, "push", "origin", "HEAD:main"); err != nil {
 		t.Fatalf("git push: %v", err)
 	}
 
@@ -148,7 +148,7 @@ func TestGitHubGitOps_OpenPR_Success(t *testing.T) {
 	}
 
 	// Verify the remote has the remediation branch
-	out, err := runGit(ctx, "", "ls-remote", "--heads", remotePath)
+	out, err := runGit(ctx, "", nil, "ls-remote", "--heads", remotePath)
 	if err != nil {
 		t.Fatalf("git ls-remote: %v", err)
 	}

@@ -11,11 +11,52 @@ import (
 // applyMemoryLimit finds the memory limit line after a limits: block and
 // replaces it with newValue. Exits the limits block when indentation drops
 // to the same level or lower than the limits: line itself.
-func applyMemoryLimit(content []byte, newValue string) ([]byte, error) {
+//
+// When containerName is non-empty, the patch is scoped to the named container
+// block (located by "- name: <containerName>") and only the limits: block
+// within that container is modified. When containerName is empty, the first
+// limits: block in the file is patched (original first-match behaviour).
+func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, error) {
 	lines := strings.Split(string(content), "\n")
+
+	startIdx := 0
+	endIdx := len(lines)
+
+	if containerName != "" {
+		// Find the container block boundaries
+		inContainer := false
+		containerStart := -1
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "- name: "+containerName {
+				inContainer = true
+				containerStart = i
+				continue
+			}
+			if inContainer {
+				// Stop at the next container entry
+				if strings.HasPrefix(trimmed, "- name:") {
+					startIdx = containerStart
+					endIdx = i
+					inContainer = false
+					break
+				}
+			}
+		}
+		if containerStart == -1 {
+			return nil, fmt.Errorf("applyMemoryLimit: container %q not found", containerName)
+		}
+		if inContainer {
+			// Container block extends to end of file
+			startIdx = containerStart
+			endIdx = len(lines)
+		}
+	}
+
 	limitsIndent := -1
 	inLimits := false
-	for i, line := range lines {
+	for i := startIdx; i < endIdx; i++ {
+		line := lines[i]
 		if line == "" {
 			continue
 		}
@@ -45,6 +86,13 @@ func applyMemoryLimit(content []byte, newValue string) ([]byte, error) {
 
 // applyEnvVar finds an env var by key and replaces its value.
 // keyValue must be in format KEY=VALUE.
+//
+// Assumption: the manifest uses the standard multi-line env var format:
+//
+//	- name: KEY
+//	  value: VAL
+//
+// Inline style (e.g. {name: KEY, value: VAL}) is not supported.
 func applyEnvVar(content []byte, keyValue string) ([]byte, error) {
 	eqIdx := strings.Index(keyValue, "=")
 	if eqIdx == -1 {
@@ -94,7 +142,7 @@ func applyImageTag(content []byte, containerName, newTag string) ([]byte, error)
 				if strings.HasPrefix(trimmed, "- name:") {
 					break
 				}
-				if strings.Contains(line, "image:") {
+				if strings.HasPrefix(trimmed, "image:") {
 					colon := strings.Index(line, "image:")
 					prefix := line[:colon]
 					imageValue := strings.TrimSpace(line[colon+len("image:"):])
@@ -142,7 +190,10 @@ func unifiedDiff(oldContent, newContent []byte, filePath string) string {
 		return fmt.Sprintf("(diff unavailable: %v)", err)
 	}
 	defer os.Remove(oldFile.Name())
-	oldFile.Write(oldContent)
+	if _, werr := oldFile.Write(oldContent); werr != nil {
+		oldFile.Close()
+		return "(diff unavailable: write error)"
+	}
 	oldFile.Close()
 
 	newFile, err := os.CreateTemp("", "new-*.yaml")
@@ -150,7 +201,10 @@ func unifiedDiff(oldContent, newContent []byte, filePath string) string {
 		return fmt.Sprintf("(diff unavailable: %v)", err)
 	}
 	defer os.Remove(newFile.Name())
-	newFile.Write(newContent)
+	if _, werr := newFile.Write(newContent); werr != nil {
+		newFile.Close()
+		return "(diff unavailable: write error)"
+	}
 	newFile.Close()
 
 	cmd := exec.Command("diff", "-u",

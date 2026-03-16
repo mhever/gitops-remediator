@@ -10,6 +10,11 @@ import (
 // deploymentName extracts the base deployment name from a pod name.
 // Pod names follow the pattern <deployment>-<rs-hash>-<pod-hash>.
 // If the pattern doesn't match, the pod name is returned unchanged.
+//
+// Limitation: StatefulSet pod names use the pattern <name>-<ordinal> (e.g.
+// "sample-app-0"), so stripping two segments would incorrectly drop part of
+// the StatefulSet name. For StatefulSet pods the caller should pass the pod
+// name directly rather than relying on this function to derive the resource name.
 func deploymentName(podName string) string {
 	// Strip pod hash suffix
 	idx := strings.LastIndex(podName, "-")
@@ -35,8 +40,13 @@ func containsDeploymentWithName(content, name string) bool {
 	foundKind := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "kind: Deployment" || trimmed == "kind: StatefulSet" {
-			foundKind = true
+		if trimmed == "---" {
+			foundKind = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "kind:") {
+			foundKind = trimmed == "kind: Deployment" || trimmed == "kind: StatefulSet"
+			continue
 		}
 		// metadata.name is indented with exactly 2 spaces in standard k8s manifests
 		if foundKind && line == "  name: "+name {

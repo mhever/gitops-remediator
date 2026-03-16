@@ -81,3 +81,18 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 6 | Process | PASS on first reviewer cycle — no MAJOR/CRITICAL issues |
 
 ---
+
+## Full-Codebase Polish Pass
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Security | GitHub token was visible in `/proc` and `ps aux` via `https://<token>@github.com/...` clone URL. Fixed by using a temp git credential store file passed via `GIT_CONFIG_*` env vars instead |
+| 2 | Memory | Deduplicator `seen` map was never pruned — unbounded growth in long-running process. Fixed by calling `purge()` on every `isDuplicate` invocation (under the existing lock) |
+| 3 | Correctness | `applyMemoryLimit` lacked container-name scoping; in multi-container pods it always patched the first container. Fixed same way as `applyImageTag` — constrain search window to the named container block |
+| 4 | Correctness | `containsDeploymentWithName` did not reset state on `---` YAML document separators — could false-positive match names from non-Deployment resources in multi-document YAML |
+| 5 | Correctness | Code fence stripping in the diagnostician used `TrimSuffix("```")` which fails if the LLM adds trailing whitespace/newlines. Fixed by extracting first `{` to last `}` — works regardless of surrounding text |
+| 6 | Correctness | Event pipeline goroutine was not waited on during shutdown — process could exit before in-flight collect/diagnose/PR operations completed. Fixed with `sync.WaitGroup` |
+| 7 | Code quality | `copy` variable in `sanitize.go` shadowed the Go built-in; `scanner.Err()` had a dead `!= io.EOF` check; resource limits read from unsanitized pod; `sanitizeArgs` used ad-hoc string logic instead of the existing `credentialRe` regex |
+| 8 | Process | Full-codebase review found 28 issues (1 CRITICAL, 10 MAJOR, 17 MINOR). All fixed in one coder pass; reviewer PASS on verification. Pattern: schedule a dedicated polish pass at the end of each multi-phase project |
+
+---

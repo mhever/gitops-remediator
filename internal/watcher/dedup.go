@@ -23,6 +23,17 @@ func newDeduplicator() *deduplicator {
 	}
 }
 
+// purge removes all entries from seen that have expired beyond dedupWindow.
+// Must be called with d.mu held.
+func (d *deduplicator) purge() {
+	now := d.clock()
+	for k, t := range d.seen {
+		if now.Sub(t) >= dedupWindow {
+			delete(d.seen, k)
+		}
+	}
+}
+
 // isDuplicate returns true if an identical FailureEvent was seen within the
 // dedup window, and records the current time if not.
 func (d *deduplicator) isDuplicate(e FailureEvent) bool {
@@ -31,6 +42,8 @@ func (d *deduplicator) isDuplicate(e FailureEvent) bool {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	d.purge()
 
 	if last, ok := d.seen[key]; ok && now.Sub(last) < dedupWindow {
 		return true

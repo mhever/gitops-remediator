@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -54,6 +55,7 @@ func main() {
 	var diag diagnostician.Diagnostician = &diagnostician.NoopDiagnostician{}
 
 	// Try to build a k8s client. Fall back to NoopWatcher if unavailable (e.g. in CI).
+	// Config resolution order: in-cluster -> $KUBECONFIG env var -> ~/.kube/config (clientcmd default)
 	var w watcher.Watcher
 	var evCh chan watcher.FailureEvent
 	var k8sClient kubernetes.Interface
@@ -93,8 +95,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	var pipelineWg sync.WaitGroup
 	if isK8sWatcher {
+		pipelineWg.Add(1)
 		go func() {
+			defer pipelineWg.Done()
 			for e := range evCh {
 				slog.Info("failure event detected",
 					"type", e.FailureType,
@@ -156,6 +161,7 @@ func main() {
 	if isK8sWatcher {
 		close(evCh)
 	}
+	pipelineWg.Wait()
 	if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, context.DeadlineExceeded) {
 		slog.Error("watcher exited with error", "error", runErr)
 		os.Exit(1)
@@ -167,7 +173,7 @@ func main() {
 		slog.Error("metrics server shutdown error", "error", err)
 	}
 
-	slog.Info("shutting down")
+	slog.Info("shutdown complete")
 }
 
 // escalationReason normalises a free-form escalation reason string into one of

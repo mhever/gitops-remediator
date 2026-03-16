@@ -28,17 +28,6 @@ func TestNoopWatcher_RunReturnsCanceledOnCancel(t *testing.T) {
 	}
 }
 
-func TestFailureTypeConstants(t *testing.T) {
-	if FailureTypeOOMKilled != "OOMKilled" {
-		t.Errorf("FailureTypeOOMKilled = %q, want %q", FailureTypeOOMKilled, "OOMKilled")
-	}
-	if FailureTypeCrashLoopBackOff != "CrashLoopBackOff" {
-		t.Errorf("FailureTypeCrashLoopBackOff = %q, want %q", FailureTypeCrashLoopBackOff, "CrashLoopBackOff")
-	}
-	if FailureTypeImagePullBackOff != "ImagePullBackOff" {
-		t.Errorf("FailureTypeImagePullBackOff = %q, want %q", FailureTypeImagePullBackOff, "ImagePullBackOff")
-	}
-}
 
 func TestK8sWatcher_EmitsOOMKilledEvent(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()

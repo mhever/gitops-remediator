@@ -39,9 +39,29 @@ var _ GitOps = (*GitHubGitOps)(nil)
 // OpenPR clones the GitOps repo, applies the patch, commits to a new branch,
 // pushes, and opens a GitHub PR. Returns the PR HTML URL.
 func (g *GitHubGitOps) OpenPR(ctx context.Context, req PRRequest) (string, error) {
-	cloneURL := g.cloneURL
-	if cloneURL == "" {
-		cloneURL = fmt.Sprintf("https://%s@github.com/%s.git", g.githubToken, g.gitOpsRepo)
+	// Write a temporary git credentials file so the token is never embedded in
+	// process arguments (which would be visible in /proc/<pid>/cmdline).
+	var credEnv []string
+	cloneURL := fmt.Sprintf("https://github.com/%s.git", g.gitOpsRepo)
+	if g.cloneURL != "" {
+		// Test override: local path, no credentials needed.
+		cloneURL = g.cloneURL
+	} else {
+		credFile, err := os.CreateTemp("", "git-creds-*")
+		if err != nil {
+			return "", fmt.Errorf("gitops: creating credential file: %w", err)
+		}
+		defer os.Remove(credFile.Name())
+		_, err = fmt.Fprintf(credFile, "https://x-access-token:%s@github.com\n", g.githubToken)
+		credFile.Close()
+		if err != nil {
+			return "", fmt.Errorf("gitops: writing credential file: %w", err)
+		}
+		credEnv = []string{
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=credential.helper",
+			"GIT_CONFIG_VALUE_0=store --file=" + credFile.Name(),
+		}
 	}
 
 	tmpDir, err := os.MkdirTemp("", "gitops-remediator-*")
@@ -51,18 +71,19 @@ func (g *GitHubGitOps) OpenPR(ctx context.Context, req PRRequest) (string, error
 	defer os.RemoveAll(tmpDir)
 
 	// Clone into tmpDir
-	if _, err := runGit(ctx, "", "clone", cloneURL, tmpDir); err != nil {
+	if _, err := runGit(ctx, "", credEnv, "clone", cloneURL, tmpDir); err != nil {
 		return "", fmt.Errorf("gitops: clone: %w", err)
 	}
 
+	// Use the event timestamp for the branch name for determinism.
 	branchName := fmt.Sprintf("remediation/%s-%s-%d",
 		req.Diag.FailureType,
 		req.Event.PodName,
-		time.Now().Unix(),
+		req.Event.Timestamp.Unix(),
 	)
 
 	// Create branch
-	if _, err := runGit(ctx, tmpDir, "checkout", "-b", branchName); err != nil {
+	if _, err := runGit(ctx, tmpDir, nil, "checkout", "-b", branchName); err != nil {
 		return "", fmt.Errorf("gitops: create branch: %w", err)
 	}
 
@@ -73,13 +94,13 @@ func (g *GitHubGitOps) OpenPR(ctx context.Context, req PRRequest) (string, error
 	}
 
 	// Stage the patched file
-	if _, err := runGit(ctx, tmpDir, "add", result.FilePath); err != nil {
+	if _, err := runGit(ctx, tmpDir, nil, "add", result.FilePath); err != nil {
 		return "", fmt.Errorf("gitops: git add: %w", err)
 	}
 
 	// Commit
 	commitMsg := fmt.Sprintf("fix: auto-remediate %s for %s", req.Diag.FailureType, req.Event.PodName)
-	if _, err := runGit(ctx, tmpDir,
+	if _, err := runGit(ctx, tmpDir, nil,
 		"-c", "user.email=remediator@gitops-remediator",
 		"-c", "user.name=gitops-remediator",
 		"commit", "-m", commitMsg,
@@ -88,7 +109,7 @@ func (g *GitHubGitOps) OpenPR(ctx context.Context, req PRRequest) (string, error
 	}
 
 	// Push
-	if _, err := runGit(ctx, tmpDir, "push", "origin", branchName); err != nil {
+	if _, err := runGit(ctx, tmpDir, credEnv, "push", "origin", branchName); err != nil {
 		return "", fmt.Errorf("gitops: git push: %w", err)
 	}
 

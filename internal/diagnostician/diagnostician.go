@@ -135,16 +135,12 @@ func (d *DeepSeekDiagnostician) Diagnose(ctx context.Context, bundle collector.D
 	)
 	d.diagLog("RESPONSE", rawJSON, tokensStr)
 
-	// Strip backtick code fences if present.
+	// Strip code fences and extract the JSON object
 	stripped := strings.TrimSpace(rawJSON)
-	if strings.HasPrefix(stripped, "```json") {
-		stripped = strings.TrimPrefix(stripped, "```json")
-		stripped = strings.TrimSuffix(stripped, "```")
-		stripped = strings.TrimSpace(stripped)
-	} else if strings.HasPrefix(stripped, "```") {
-		stripped = strings.TrimPrefix(stripped, "```")
-		stripped = strings.TrimSuffix(stripped, "```")
-		stripped = strings.TrimSpace(stripped)
+	if start := strings.Index(stripped, "{"); start != -1 {
+		if end := strings.LastIndex(stripped, "}"); end > start {
+			stripped = stripped[start : end+1]
+		}
 	}
 
 	var diagnosis Diagnosis

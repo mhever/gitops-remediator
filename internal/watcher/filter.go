@@ -12,7 +12,14 @@ import (
 func classifyPod(pod *corev1.Pod) []FailureEvent {
 	var events []FailureEvent
 
-	for _, cs := range append(pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses...) {
+	allStatuses := make([]corev1.ContainerStatus, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+	for _, cs := range pod.Status.InitContainerStatuses {
+		allStatuses = append(allStatuses, cs)
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		allStatuses = append(allStatuses, cs)
+	}
+	for _, cs := range allStatuses {
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
 			events = append(events, FailureEvent{
 				Namespace:     pod.Namespace,
@@ -96,8 +103,10 @@ func classifyEvent(event *corev1.Event) *FailureEvent {
 	}
 
 	return &FailureEvent{
-		Namespace:     event.Namespace,
-		PodName:       event.InvolvedObject.Name,
+		Namespace: event.Namespace,
+		PodName:   event.InvolvedObject.Name,
+		// ContainerName is left empty: k8s Events don't carry container-level
+		// granularity — they reference the Pod as the involved object.
 		ContainerName: "",
 		FailureType:   ft,
 		RawReason:     event.Reason,

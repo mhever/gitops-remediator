@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -106,7 +107,12 @@ func (w *K8sWatcher) Run(ctx context.Context) error {
 	}
 
 	factory.Start(ctx.Done())
-	factory.WaitForCacheSync(ctx.Done())
+	synced := factory.WaitForCacheSync(ctx.Done())
+	for informerType, ok := range synced {
+		if !ok {
+			w.logger.Warn("informer cache sync failed", "type", fmt.Sprintf("%T", informerType))
+		}
+	}
 
 	<-ctx.Done()
 	return ctx.Err()

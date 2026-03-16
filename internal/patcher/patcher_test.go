@@ -206,7 +206,7 @@ spec:
             memory: 128Mi
             ephemeral-storage: 1Gi
 `)
-	result, err := applyMemoryLimit(input, "512Mi")
+	result, err := applyMemoryLimit(input, "", "512Mi")
 	if err != nil {
 		t.Fatalf("applyMemoryLimit: %v", err)
 	}
@@ -220,6 +220,63 @@ spec:
 	// Other fields must be preserved
 	if !strings.Contains(out, "ephemeral-storage: 1Gi") {
 		t.Errorf("expected 'ephemeral-storage: 1Gi' to be preserved, got:\n%s", out)
+	}
+}
+
+func TestManifestPatcher_ApplyMemoryLimit_ContainerScoped(t *testing.T) {
+	// Two-container fixture: only the named container's memory limit should be changed.
+	dir := t.TempDir()
+	fixture := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: sidecar
+        resources:
+          limits:
+            memory: 64Mi
+      - name: app
+        resources:
+          limits:
+            memory: 128Mi
+`)
+	manifestPath := dir + "/deployment.yaml"
+	if err := os.WriteFile(manifestPath, fixture, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	p := NewManifestPatcher()
+	diag := diagnostician.Diagnosis{
+		FailureType: "OOMKilled",
+		PatchType:   "memory_limit",
+		PatchValue:  "256Mi",
+		Remediable:  true,
+	}
+	event := watcher.FailureEvent{
+		PodName:       "sample-app-abc12-xyz99",
+		Namespace:     "remediator-test",
+		ContainerName: "app",
+	}
+
+	result, err := p.Apply(context.Background(), dir, diag, event)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	newStr := string(result.NewContent)
+	if !strings.Contains(newStr, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' in output, got:\n%s", newStr)
+	}
+	// sidecar memory must be untouched
+	if !strings.Contains(newStr, "memory: 64Mi") {
+		t.Errorf("expected sidecar 'memory: 64Mi' to be preserved, got:\n%s", newStr)
+	}
+	// old app memory must be replaced
+	if strings.Contains(newStr, "memory: 128Mi") {
+		t.Errorf("expected old 'memory: 128Mi' to be replaced, got:\n%s", newStr)
 	}
 }
 
@@ -291,5 +348,54 @@ spec:
 	}
 	if !containsDeploymentWithName(content, "other-app") {
 		t.Error("expected true for correct metadata name")
+	}
+}
+
+func TestContainsDeploymentWithName_MultiDocServiceShouldNotMatch(t *testing.T) {
+	// Multi-document YAML: first doc is Deployment with different name,
+	// second doc is Service with the target name — must return false.
+	content := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: other-app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+`
+	if containsDeploymentWithName(content, "my-app") {
+		t.Error("expected false: name appears under kind: Service, not Deployment/StatefulSet")
+	}
+}
+
+func TestContainsDeploymentWithName_MultiDocSecondDocMatches(t *testing.T) {
+	// Multi-document YAML with --- separator: target deployment is in the second doc.
+	content := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: other-app
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+`
+	if !containsDeploymentWithName(content, "my-app") {
+		t.Error("expected true: target deployment found in second document")
+	}
+}
+
+func TestDeploymentName_StatefulSetPod(t *testing.T) {
+	// StatefulSet pod names use <name>-<ordinal> pattern. Stripping two segments
+	// is incorrect for ordinal-style names (see deploymentName doc comment).
+	// Current behaviour: strips two segments, which is wrong for this case.
+	// This test documents the existing behaviour as a known limitation.
+	got := deploymentName("sample-app-0")
+	// After stripping: "sample-app-0" -> strip last "-0" -> "sample-app" -> strip last "-app" -> "sample"
+	// This is the current (documented-limitation) behaviour.
+	want := "sample"
+	if got != want {
+		t.Errorf("deploymentName(%q) = %q, want %q (known limitation for StatefulSet pods)", "sample-app-0", got, want)
 	}
 }

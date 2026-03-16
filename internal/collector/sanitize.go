@@ -5,10 +5,10 @@ import corev1 "k8s.io/api/core/v1"
 // sanitize returns a deep copy of the pod with all env var values replaced
 // by "[REDACTED]". Keys are preserved. Applied before any external transmission.
 func sanitize(pod *corev1.Pod) *corev1.Pod {
-	copy := pod.DeepCopy()
-	redactEnvVars(copy.Spec.InitContainers)
-	redactEnvVars(copy.Spec.Containers)
-	return copy
+	podCopy := pod.DeepCopy()
+	redactEnvVars(podCopy.Spec.InitContainers)
+	redactEnvVars(podCopy.Spec.Containers)
+	return podCopy
 }
 
 // redactEnvVars replaces all env var values and ValueFrom references with

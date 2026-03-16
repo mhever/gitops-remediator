@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -113,7 +112,7 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 
 	// === RESOURCE LIMITS ===
 	fmt.Fprintf(&buf, "=== RESOURCE LIMITS ===\n")
-	for _, container := range pod.Spec.Containers {
+	for _, container := range sanitizedPod.Spec.Containers {
 		res := container.Resources
 		cpuReq := res.Requests.Cpu().String()
 		cpuLimit := res.Limits.Cpu().String()
@@ -202,7 +201,7 @@ func (c *K8sCollector) fetchLogs(ctx context.Context, ns, podName, containerName
 		sb.WriteByte('\n')
 		lineCount++
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil {
 		return sb.String(), fmt.Errorf("read logs: %w", err)
 	}
 	return sb.String(), nil

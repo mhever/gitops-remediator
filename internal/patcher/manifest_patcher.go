@@ -40,7 +40,7 @@ func (p *ManifestPatcher) Apply(ctx context.Context, repoDir string, diag diagno
 	var newContent []byte
 	switch diag.PatchType {
 	case "memory_limit":
-		newContent, err = applyMemoryLimit(oldContent, diag.PatchValue)
+		newContent, err = applyMemoryLimit(oldContent, event.ContainerName, diag.PatchValue)
 	case "env_var":
 		newContent, err = applyEnvVar(oldContent, diag.PatchValue)
 	case "image_tag":
@@ -64,7 +64,7 @@ func (p *ManifestPatcher) Apply(ctx context.Context, repoDir string, diag diagno
 
 	relPath, err := filepath.Rel(repoDir, filePath)
 	if err != nil {
-		relPath = filePath
+		return nil, fmt.Errorf("patcher: compute relative path: %w", err)
 	}
 
 	diff := unifiedDiff(oldContent, newContent, relPath)

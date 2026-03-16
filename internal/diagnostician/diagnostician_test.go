@@ -221,26 +221,48 @@ func TestDeepSeekDiagnostician_CodeFenceStripping(t *testing.T) {
 		"patch_value": "512Mi",
 		"reasoning_summary": "OOMKilled, increased memory"
 	}`
-	wrapped := "```json\n" + diagJSON + "\n```"
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(makeChatResponse(wrapped, 100, 200, 300))
-	}))
-	defer server.Close()
-
-	d := newTestDiagnostician(t, server.URL)
-	bundle := collector.DiagnosticBundle{Content: "oom bundle"}
-
-	diagnosis, err := d.Diagnose(context.Background(), bundle)
-	if err != nil {
-		t.Fatalf("expected nil error after code fence stripping, got: %v", err)
+	tests := []struct {
+		name    string
+		wrapped string
+	}{
+		{
+			name:    "json code fence",
+			wrapped: "```json\n" + diagJSON + "\n```",
+		},
+		{
+			name:    "plain code fence",
+			wrapped: "```\n" + diagJSON + "\n```",
+		},
+		{
+			name:    "trailing newline after closing fence",
+			wrapped: "```json\n" + diagJSON + "\n```\n",
+		},
 	}
-	if diagnosis.FailureType != "OOMKilled" {
-		t.Errorf("expected OOMKilled, got: %s", diagnosis.FailureType)
-	}
-	if diagnosis.PatchValue != "512Mi" {
-		t.Errorf("expected 512Mi, got: %s", diagnosis.PatchValue)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := tt.wrapped
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write(makeChatResponse(wrapped, 100, 200, 300))
+			}))
+			defer server.Close()
+
+			d := newTestDiagnostician(t, server.URL)
+			bundle := collector.DiagnosticBundle{Content: "oom bundle"}
+
+			diagnosis, err := d.Diagnose(context.Background(), bundle)
+			if err != nil {
+				t.Fatalf("expected nil error after code fence stripping, got: %v", err)
+			}
+			if diagnosis.FailureType != "OOMKilled" {
+				t.Errorf("expected OOMKilled, got: %s", diagnosis.FailureType)
+			}
+			if diagnosis.PatchValue != "512Mi" {
+				t.Errorf("expected 512Mi, got: %s", diagnosis.PatchValue)
+			}
+		})
 	}
 }
