@@ -53,3 +53,18 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 6 | Coder iteration | One reviewer cycle (FAIL → fix → PASS). MAJOR issue was a missing security assertion in tests |
 
 ---
+
+## Phase 4 — Patcher + GitOps
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Reviewer catch (CRITICAL) | GitHub token embedded in clone URL `https://<token>@github.com/...` was being printed verbatim in `runGit` error messages. Fix: `sanitizeArgs` + `sanitizeOutput` regex redaction applied to error paths only. Pattern: any URL with credentials must be sanitised before appearing in logs or errors |
+| 2 | Reviewer catch (MAJOR) | `os.RemoveAll(tmpDir)` called manually at 6 return sites instead of `defer`. One missed path = leaked temp dir. Always `defer` cleanup immediately after resource acquisition |
+| 3 | Reviewer catch (MAJOR) | `findManifest` matched `"name: <x>"` anywhere in file content including container names and labels. Fixed with `containsDeploymentWithName` — line-by-line, scoped to after `kind: Deployment`, exact 2-space indent match |
+| 4 | Reviewer catch (MAJOR) | `applyImageTag` patched the first `image:` line in the file regardless of container. Fixed with container-name scoping: scan for `- name: <container>`, patch the next `image:` before the next `- name:` |
+| 5 | Reviewer catch (MAJOR) | `applyMemoryLimit` exited the `limits:` block on any unrecognised sub-field (e.g. `ephemeral-storage:`). Fixed with indentation-level tracking — stay in block while indent is deeper than `limits:` line |
+| 6 | Design | `diff -u` via `os/exec` for unified diff generation — exit code 1 means files differ (expected), not an error. Must use `errors.As` + `ExitCode()` check |
+| 7 | Design | `go-git` not in module cache; `os/exec` with system `git` is simpler, no new dependency, and reliable on the ThinkCentre host |
+| 8 | Coder iteration | Two reviewer cycles (FAIL → fix → PASS). All 5 blocking issues from first pass were valid and fixed cleanly |
+
+---

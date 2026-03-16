@@ -36,6 +36,10 @@ func main() {
 
 	metrics.Register()
 
+	// Default to noop implementations; overridden below if k8s is available.
+	var col collector.Collector = &collector.NoopCollector{}
+	var diag diagnostician.Diagnostician = &diagnostician.NoopDiagnostician{}
+
 	// Try to build a k8s client. Fall back to NoopWatcher if unavailable (e.g. in CI).
 	var w watcher.Watcher
 	var evCh chan watcher.FailureEvent
@@ -59,42 +63,67 @@ func main() {
 			evCh = make(chan watcher.FailureEvent, 100)
 			w = watcher.NewK8sWatcher(k8sClient, cfg.Namespace, evCh, slog.Default())
 			isK8sWatcher = true
-			go func() {
-				for e := range evCh {
-					slog.Info("failure event detected",
-						"type", e.FailureType,
-						"namespace", e.Namespace,
-						"pod", e.PodName,
-						"container", e.ContainerName,
-						"reason", e.RawReason,
-					)
-				}
-			}()
+
+			col = collector.NewK8sCollector(k8sClient, slog.Default())
+			diag = diagnostician.NewDeepSeekDiagnostician(
+				cfg.DeepSeekAPIKey,
+				cfg.DiagnosticianLogPath,
+				nil,
+				slog.Default(),
+			)
 		}
 	}
 
-	var c collector.Collector = &collector.NoopCollector{}
-	if isK8sWatcher {
-		col := collector.NewK8sCollector(k8sClient, slog.Default())
-		_ = col // used in Phase 3
-		c = col
+	if !isK8sWatcher {
+		diag = diagnostician.NewDeepSeekDiagnostician(
+			cfg.DeepSeekAPIKey,
+			cfg.DiagnosticianLogPath,
+			nil,
+			slog.Default(),
+		)
 	}
 
-	diag := diagnostician.NewDeepSeekDiagnostician(
-		cfg.DeepSeekAPIKey,
-		cfg.DiagnosticianLogPath,
-		nil,
-		slog.Default(),
-	)
-	_ = diag // used in Phase 4
+	p := patcher.NewManifestPatcher()
+	g := gitops.NewGitHubGitOps(cfg.GitOpsRepo, cfg.GitHubToken, p, slog.Default())
 
-	var p patcher.Patcher = &patcher.NoopPatcher{}
-	var g gitops.GitOps = &gitops.NoopGitOps{}
+	if isK8sWatcher {
+		go func() {
+			for e := range evCh {
+				slog.Info("failure event detected",
+					"type", e.FailureType,
+					"namespace", e.Namespace,
+					"pod", e.PodName,
+					"container", e.ContainerName,
+					"reason", e.RawReason,
+				)
 
-	// Suppress "declared and not used" — stubs will be wired in later phases.
-	_ = c
-	_ = p
-	_ = g
+				bundle, err := col.Collect(context.Background(), e)
+				if err != nil {
+					slog.Error("collector failed", "error", err, "pod", e.PodName)
+					continue
+				}
+
+				diagnosis, err := diag.Diagnose(context.Background(), *bundle)
+				if err != nil {
+					slog.Error("diagnostician failed", "error", err, "pod", e.PodName)
+					continue
+				}
+
+				if !diagnosis.Remediable {
+					// diagnostician already logged the escalation
+					continue
+				}
+
+				prURL, err := g.OpenPR(context.Background(), gitops.PRRequest{Diag: *diagnosis, Event: e})
+				if err != nil {
+					slog.Error("failed to open PR", "error", err, "pod", e.PodName)
+					continue
+				}
+
+				slog.Info("remediation PR opened", "url", prURL, "pod", e.PodName, "type", diagnosis.FailureType)
+			}
+		}()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

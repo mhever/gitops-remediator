@@ -7,9 +7,17 @@ import (
 	"github.com/mhever/gitops-remediator/internal/watcher"
 )
 
-// Patcher applies a patch to the GitOps repository manifest.
+// PatchResult is the output of a successful patch operation.
+type PatchResult struct {
+	FilePath   string // repo-relative path of the patched file
+	OldContent []byte
+	NewContent []byte
+	Diff       string // unified diff (oldContent vs newContent)
+}
+
+// Patcher locates the correct manifest in a cloned repo and applies the patch.
 type Patcher interface {
-	Apply(ctx context.Context, diag diagnostician.Diagnosis, event watcher.FailureEvent) error
+	Apply(ctx context.Context, repoDir string, diag diagnostician.Diagnosis, event watcher.FailureEvent) (*PatchResult, error)
 }
 
 // NoopPatcher satisfies Patcher without doing anything.
@@ -17,6 +25,7 @@ type NoopPatcher struct{}
 
 var _ Patcher = (*NoopPatcher)(nil)
 
-func (n *NoopPatcher) Apply(ctx context.Context, diag diagnostician.Diagnosis, event watcher.FailureEvent) error {
-	return nil
+// Apply returns an empty PatchResult without modifying anything.
+func (n *NoopPatcher) Apply(ctx context.Context, repoDir string, diag diagnostician.Diagnosis, event watcher.FailureEvent) (*PatchResult, error) {
+	return &PatchResult{}, nil
 }

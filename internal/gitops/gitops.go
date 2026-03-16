@@ -7,17 +7,14 @@ import (
 	"github.com/mhever/gitops-remediator/internal/watcher"
 )
 
-// PRRequest contains the information needed to open a remediation PR.
+// PRRequest contains all information needed to open a remediation PR.
 type PRRequest struct {
 	Diag  diagnostician.Diagnosis
 	Event watcher.FailureEvent
-	Diff  string // the YAML patch diff
 }
 
-// GitOps clones the GitOps repo, commits a patch, and opens a GitHub PR.
+// GitOps clones the GitOps repo, patches the manifest, commits, and opens a PR.
 type GitOps interface {
-	// OpenPR creates a branch, commits the patch, and opens a GitHub PR.
-	// Returns the PR URL.
 	OpenPR(ctx context.Context, req PRRequest) (string, error)
 }
 
@@ -26,6 +23,7 @@ type NoopGitOps struct{}
 
 var _ GitOps = (*NoopGitOps)(nil)
 
+// OpenPR returns an empty URL without doing anything.
 func (n *NoopGitOps) OpenPR(ctx context.Context, req PRRequest) (string, error) {
 	return "", nil
 }
