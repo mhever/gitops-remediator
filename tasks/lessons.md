@@ -68,3 +68,16 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 8 | Coder iteration | Two reviewer cycles (FAIL → fix → PASS). All 5 blocking issues from first pass were valid and fixed cleanly |
 
 ---
+
+## Phase 5 — Metrics + Polish
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Environment | `github.com/prometheus/client_golang v1.23.2` available via proxy; not pre-cached but downloaded successfully |
+| 2 | Design | Metrics initialized in `init()`, registered in `Register()` — allows tests to use per-test `prometheus.NewRegistry()` without double-register panics |
+| 3 | Design | `escalationReason()` normalises free-form DeepSeek escalation strings to the three Prometheus label values: "application_panic", "auth_failure", "unknown" |
+| 4 | Reviewer MINOR | Test counter assertions use `>=` because package-level prometheus vars accumulate across tests. A before/after baseline pattern is cleaner |
+| 5 | Coder fix | Dead-code block creating `DeepSeekDiagnostician` on the noop path was correctly removed |
+| 6 | Process | PASS on first reviewer cycle — no MAJOR/CRITICAL issues |
+
+---

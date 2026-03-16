@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitops-remediator
+  namespace: remediator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitops-remediator
+  template:
+    metadata:
+      labels:
+        app: gitops-remediator
+    spec:
+      serviceAccountName: gitops-remediator
+      containers:
+        - name: remediator
+          image: ghcr.io/mhever/gitops-remediator:latest
+          envFrom:
+            - configMapRef:
+                name: gitops-remediator-config
+          env:
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gitops-remediator-secrets
+                  key: deepseek-api-key
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitops-remediator-secrets
+                  key: github-token
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: log
+              mountPath: /var/log/remediator
+      volumes:
+        - name: log
+          emptyDir: {}

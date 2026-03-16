@@ -77,4 +77,4 @@ If a subagent step fails **twice consecutively** on the same task, **stop**. Do 
 
 ## Current Phase
 
-**Phase 4 — Patcher + GitOps** (started 2026-03-16)
+**Phase 5 — Metrics + Polish** (started 2026-03-16)

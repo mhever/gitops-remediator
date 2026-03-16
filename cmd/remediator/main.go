@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +37,17 @@ func main() {
 	slog.Info("starting gitops-remediator", "namespace", cfg.Namespace, "metrics_addr", cfg.MetricsAddr)
 
 	metrics.Register()
+
+	metricsServer := &http.Server{
+		Addr:    cfg.MetricsAddr,
+		Handler: metrics.Handler(),
+	}
+	go func() {
+		slog.Info("metrics server listening", "addr", cfg.MetricsAddr)
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
 
 	// Default to noop implementations; overridden below if k8s is available.
 	var col collector.Collector = &collector.NoopCollector{}
@@ -74,17 +87,11 @@ func main() {
 		}
 	}
 
-	if !isK8sWatcher {
-		diag = diagnostician.NewDeepSeekDiagnostician(
-			cfg.DeepSeekAPIKey,
-			cfg.DiagnosticianLogPath,
-			nil,
-			slog.Default(),
-		)
-	}
-
 	p := patcher.NewManifestPatcher()
 	g := gitops.NewGitHubGitOps(cfg.GitOpsRepo, cfg.GitHubToken, p, slog.Default())
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	if isK8sWatcher {
 		go func() {
@@ -97,36 +104,40 @@ func main() {
 					"reason", e.RawReason,
 				)
 
-				bundle, err := col.Collect(context.Background(), e)
+				metrics.FailuresDetected.WithLabelValues(string(e.FailureType)).Inc()
+
+				bundle, err := col.Collect(ctx, e)
 				if err != nil {
 					slog.Error("collector failed", "error", err, "pod", e.PodName)
 					continue
 				}
 
-				diagnosis, err := diag.Diagnose(context.Background(), *bundle)
+				start := time.Now()
+				diagnosis, err := diag.Diagnose(ctx, *bundle)
+				metrics.DiagnosticianLatency.Observe(time.Since(start).Seconds())
 				if err != nil {
 					slog.Error("diagnostician failed", "error", err, "pod", e.PodName)
+					metrics.DiagnosticianErrors.Inc()
 					continue
 				}
 
 				if !diagnosis.Remediable {
-					// diagnostician already logged the escalation
+					reason := escalationReason(diagnosis.EscalationReason)
+					metrics.Escalations.WithLabelValues(reason).Inc()
 					continue
 				}
 
-				prURL, err := g.OpenPR(context.Background(), gitops.PRRequest{Diag: *diagnosis, Event: e})
+				prURL, err := g.OpenPR(ctx, gitops.PRRequest{Diag: *diagnosis, Event: e})
 				if err != nil {
 					slog.Error("failed to open PR", "error", err, "pod", e.PodName)
 					continue
 				}
 
+				metrics.PRsOpened.Inc()
 				slog.Info("remediation PR opened", "url", prURL, "pod", e.PodName, "type", diagnosis.FailureType)
 			}
 		}()
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -150,5 +161,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("metrics server shutdown error", "error", err)
+	}
+
 	slog.Info("shutting down")
+}
+
+// escalationReason normalises a free-form escalation reason string into one of
+// the three Prometheus label values: "application_panic", "auth_failure", "unknown".
+func escalationReason(reason string) string {
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "panic"):
+		return "application_panic"
+	case strings.Contains(lower, "auth") || strings.Contains(lower, "unauthorized"):
+		return "auth_failure"
+	default:
+		return "unknown"
+	}
 }

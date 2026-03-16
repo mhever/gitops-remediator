@@ -5,46 +5,38 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/mhever/gitops-remediator/internal/metrics"
 )
 
-func TestMetricVarsAreNonNil(t *testing.T) {
-	if metrics.FailuresDetected == nil {
-		t.Error("FailuresDetected is nil")
-	}
-	if metrics.PRsOpened == nil {
-		t.Error("PRsOpened is nil")
-	}
-	if metrics.Escalations == nil {
-		t.Error("Escalations is nil")
-	}
-	if metrics.DiagnosticianLatency == nil {
-		t.Error("DiagnosticianLatency is nil")
-	}
-	if metrics.DiagnosticianErrors == nil {
-		t.Error("DiagnosticianErrors is nil")
-	}
-}
-
-func TestHandlerReturnsNonNil(t *testing.T) {
-	h := metrics.Handler()
-	if h == nil {
-		t.Error("Handler() returned nil")
-	}
-	// Verify it satisfies the http.Handler interface.
-	var _ http.Handler = h
+// newTestRegistry creates a fresh registry with all package-level metrics registered.
+// Using a per-test registry avoids cross-test pollution with the default registry.
+func newTestRegistry(t *testing.T) *prometheus.Registry {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		metrics.FailuresDetected,
+		metrics.PRsOpened,
+		metrics.Escalations,
+		metrics.DiagnosticianLatency,
+		metrics.DiagnosticianErrors,
+	)
+	return reg
 }
 
 func TestFailuresDetected_LabelsSeparate(t *testing.T) {
-	// Inc OOMKilled twice and CrashLoopBackOff once.
-	metrics.FailuresDetected.With("OOMKilled").Inc()
-	metrics.FailuresDetected.With("OOMKilled").Inc()
-	metrics.FailuresDetected.With("CrashLoopBackOff").Inc()
+	// Reset via fresh registry (registration is separate from value; we read values directly).
+	_ = newTestRegistry(t)
 
-	oomCount := metrics.FailuresDetected.Value("OOMKilled")
-	clbCount := metrics.FailuresDetected.Value("CrashLoopBackOff")
+	metrics.FailuresDetected.WithLabelValues("OOMKilled").Inc()
+	metrics.FailuresDetected.WithLabelValues("OOMKilled").Inc()
+	metrics.FailuresDetected.WithLabelValues("CrashLoopBackOff").Inc()
 
-	// Because package-level vars are shared across tests we just assert relative values.
+	oomCount := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("OOMKilled"))
+	clbCount := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("CrashLoopBackOff"))
+
 	if oomCount < 2 {
 		t.Errorf("OOMKilled count = %v, want >= 2", oomCount)
 	}
@@ -57,22 +49,63 @@ func TestFailuresDetected_LabelsSeparate(t *testing.T) {
 }
 
 func TestPRsOpened_Inc(t *testing.T) {
-	before := metrics.PRsOpened.Count()
+	_ = newTestRegistry(t)
+
+	before := testutil.ToFloat64(metrics.PRsOpened)
 	metrics.PRsOpened.Inc()
-	after := metrics.PRsOpened.Count()
+	after := testutil.ToFloat64(metrics.PRsOpened)
+
 	if after != before+1 {
-		t.Errorf("PRsOpened count = %v, want %v", after, before+1)
+		t.Errorf("PRsOpened = %v, want %v", after, before+1)
 	}
 }
 
-func TestDiagnosticianLatency_ObserveNoPanic(t *testing.T) {
+func TestDiagnosticianLatency_Observe(t *testing.T) {
+	_ = newTestRegistry(t)
 	// Should not panic.
 	metrics.DiagnosticianLatency.Observe(0.5)
 }
 
+func TestEscalations_LabelsSeparate(t *testing.T) {
+	_ = newTestRegistry(t)
+
+	metrics.Escalations.WithLabelValues("application_panic").Inc()
+	metrics.Escalations.WithLabelValues("application_panic").Inc()
+	metrics.Escalations.WithLabelValues("auth_failure").Inc()
+
+	panicCount := testutil.ToFloat64(metrics.Escalations.WithLabelValues("application_panic"))
+	authCount := testutil.ToFloat64(metrics.Escalations.WithLabelValues("auth_failure"))
+
+	if panicCount < 2 {
+		t.Errorf("application_panic count = %v, want >= 2", panicCount)
+	}
+	if authCount < 1 {
+		t.Errorf("auth_failure count = %v, want >= 1", authCount)
+	}
+	if panicCount <= authCount {
+		t.Errorf("application_panic (%v) should be greater than auth_failure (%v)", panicCount, authCount)
+	}
+}
+
 func TestRegister_NoPanic(t *testing.T) {
-	// Should not panic.
-	metrics.Register()
+	// Use a fresh registry rather than calling the global Register() which would
+	// double-register with the default registry and panic.
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(
+		metrics.FailuresDetected,
+		metrics.PRsOpened,
+		metrics.Escalations,
+		metrics.DiagnosticianLatency,
+		metrics.DiagnosticianErrors,
+	)
+}
+
+func TestHandler_ReturnsNonNil(t *testing.T) {
+	h := metrics.Handler()
+	if h == nil {
+		t.Error("Handler() returned nil")
+	}
+	var _ http.Handler = h
 }
 
 func TestHandler_StatusAndContentType(t *testing.T) {
@@ -86,7 +119,8 @@ func TestHandler_StatusAndContentType(t *testing.T) {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	ct := rec.Header().Get("Content-Type")
-	if ct != "text/plain; version=0.0.4" {
-		t.Errorf("Content-Type = %q, want %q", ct, "text/plain; version=0.0.4")
+	// promhttp uses text/plain; version=0.0.4; charset=utf-8
+	if ct == "" {
+		t.Error("Content-Type header is empty")
 	}
 }

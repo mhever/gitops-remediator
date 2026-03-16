@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: gitops-remediator
+rules:
+  # Watch pods and their logs in the monitored namespace
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Watch events in the monitored namespace
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]

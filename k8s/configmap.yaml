@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitops-remediator-config
+  namespace: remediator-system
+data:
+  REMEDIATOR_NAMESPACE: "remediator-test"
+  GITOPS_REPO: "mhever/gitops-remediator"
+  DIAGNOSTICIAN_LOG_PATH: "/var/log/remediator/diagnostician.log"
+  METRICS_ADDR: ":9090"
