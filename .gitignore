@@ -1,0 +1,26 @@
+# Build output
+/bin/
+/dist/
+remediator
+
+# Go test cache and coverage
+*.test
+*.out
+coverage.html
+
+# Environment / secrets
+.env
+.env.*
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Phase tracking (local orchestration state)
+tasks/phase-start.txt
