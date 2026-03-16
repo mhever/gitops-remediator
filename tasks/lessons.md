@@ -16,3 +16,15 @@ Updated at the end of each phase. Records model behavior observations, bugs foun
 | 6 | Coder iteration | One reviewer cycle required (FAIL → fix → PASS). All CRITICAL/MAJOR issues from first pass were valid and fixed cleanly |
 
 ---
+
+## Phase 1 — Watcher
+
+| # | Category | Observation |
+|---|---|---|
+| 1 | Reviewer catch | `classifyEvent` mapped `"BackOff"` and `"Failed"` k8s event reasons to failure types without inspecting `event.Message`. Both reasons are ambiguous — "BackOff" covers crash-loop and image-pull; "Failed" covers dozens of unrelated failures. Fix: `strings.Contains` on lowercased message to disambiguate. Always inspect message content for ambiguous k8s event reasons |
+| 2 | Reviewer catch | `AddEventHandler` return value `(ResourceEventHandlerRegistration, error)` was suppressed with `//nolint:errcheck`. Should be checked and returned — propagation up through `Run()` is correct |
+| 3 | Coder iteration | One reviewer cycle required (FAIL → fix → PASS). Both MAJOR and MINOR issues from first pass were valid and fixed cleanly |
+| 4 | Design | `classifyPod` on container statuses is the ground truth; `classifyEvent` is a supplementary signal and requires message inspection to be reliable |
+| 5 | Environment | k8s.io dependencies resolved to v0.35.2 despite specifying v0.34.3 — `go mod tidy` always resolves to the highest compatible available version |
+
+---
