@@ -109,7 +109,7 @@ func (d *OpenRouterDiagnostician) Ping(ctx context.Context) error {
 	}
 	defer httpResp.Body.Close()
 
-	body, _ := io.ReadAll(httpResp.Body)
+	body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1024))
 	if httpResp.StatusCode != http.StatusOK {
 		snippet := body
 		if len(snippet) > 200 {
@@ -158,7 +158,7 @@ func (d *OpenRouterDiagnostician) Diagnose(ctx context.Context, bundle collector
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(httpResp.Body, 10<<20))
 	if err != nil {
 		return nil, fmt.Errorf("diagnostician: read response body: %w", err)
 	}

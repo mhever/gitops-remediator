@@ -27,8 +27,10 @@ func newTestRegistry(t *testing.T) *prometheus.Registry {
 }
 
 func TestFailuresDetected_LabelsSeparate(t *testing.T) {
-	// Reset via fresh registry (registration is separate from value; we read values directly).
 	_ = newTestRegistry(t)
+
+	beforeOOM := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("OOMKilled"))
+	beforeCLB := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("CrashLoopBackOff"))
 
 	metrics.FailuresDetected.WithLabelValues("OOMKilled").Inc()
 	metrics.FailuresDetected.WithLabelValues("OOMKilled").Inc()
@@ -37,14 +39,11 @@ func TestFailuresDetected_LabelsSeparate(t *testing.T) {
 	oomCount := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("OOMKilled"))
 	clbCount := testutil.ToFloat64(metrics.FailuresDetected.WithLabelValues("CrashLoopBackOff"))
 
-	if oomCount < 2 {
-		t.Errorf("OOMKilled count = %v, want >= 2", oomCount)
+	if oomCount != beforeOOM+2 {
+		t.Errorf("OOMKilled count = %v, want %v", oomCount, beforeOOM+2)
 	}
-	if clbCount < 1 {
-		t.Errorf("CrashLoopBackOff count = %v, want >= 1", clbCount)
-	}
-	if oomCount <= clbCount {
-		t.Errorf("OOMKilled count (%v) should be greater than CrashLoopBackOff count (%v)", oomCount, clbCount)
+	if clbCount != beforeCLB+1 {
+		t.Errorf("CrashLoopBackOff count = %v, want %v", clbCount, beforeCLB+1)
 	}
 }
 
@@ -69,6 +68,9 @@ func TestDiagnosticianLatency_Observe(t *testing.T) {
 func TestEscalations_LabelsSeparate(t *testing.T) {
 	_ = newTestRegistry(t)
 
+	beforePanic := testutil.ToFloat64(metrics.Escalations.WithLabelValues("application_panic"))
+	beforeAuth := testutil.ToFloat64(metrics.Escalations.WithLabelValues("auth_failure"))
+
 	metrics.Escalations.WithLabelValues("application_panic").Inc()
 	metrics.Escalations.WithLabelValues("application_panic").Inc()
 	metrics.Escalations.WithLabelValues("auth_failure").Inc()
@@ -76,14 +78,11 @@ func TestEscalations_LabelsSeparate(t *testing.T) {
 	panicCount := testutil.ToFloat64(metrics.Escalations.WithLabelValues("application_panic"))
 	authCount := testutil.ToFloat64(metrics.Escalations.WithLabelValues("auth_failure"))
 
-	if panicCount < 2 {
-		t.Errorf("application_panic count = %v, want >= 2", panicCount)
+	if panicCount != beforePanic+2 {
+		t.Errorf("application_panic count = %v, want %v", panicCount, beforePanic+2)
 	}
-	if authCount < 1 {
-		t.Errorf("auth_failure count = %v, want >= 1", authCount)
-	}
-	if panicCount <= authCount {
-		t.Errorf("application_panic (%v) should be greater than auth_failure (%v)", panicCount, authCount)
+	if authCount != beforeAuth+1 {
+		t.Errorf("auth_failure count = %v, want %v", authCount, beforeAuth+1)
 	}
 }
 

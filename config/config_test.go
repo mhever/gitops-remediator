@@ -67,9 +67,9 @@ func TestLoad_MissingOpenRouterAPIKey(t *testing.T) {
 }
 
 func TestLoad_MissingGitHubToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("OPENROUTER_API_KEY", "sk-test-key")
 	t.Setenv("GITOPS_REPO", "owner/repo")
-	// GITHUB_TOKEN intentionally not set
 
 	_, err := Load()
 	if err == nil {
@@ -81,9 +81,9 @@ func TestLoad_MissingGitHubToken(t *testing.T) {
 }
 
 func TestLoad_MissingGitOpsRepo(t *testing.T) {
+	t.Setenv("GITOPS_REPO", "")
 	t.Setenv("OPENROUTER_API_KEY", "sk-test-key")
 	t.Setenv("GITHUB_TOKEN", "ghp-test-token")
-	// GITOPS_REPO intentionally not set
 
 	_, err := Load()
 	if err == nil {

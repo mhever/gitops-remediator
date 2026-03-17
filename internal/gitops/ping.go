@@ -27,7 +27,7 @@ func (g *GitHubGitOps) Ping(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return nil
