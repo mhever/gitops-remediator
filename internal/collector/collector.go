@@ -4,18 +4,26 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/mhever/gitops-remediator/internal/watcher"
 )
+
+// ErrPodGone is returned by Collect when the pod no longer exists.
+// This is a normal race between event emission and collection.
+var ErrPodGone = errors.New("pod no longer exists")
 
 // DiagnosticBundle is the assembled context sent to the Diagnostician.
 type DiagnosticBundle struct {
@@ -62,6 +70,9 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 	// 1. Fetch pod spec + status.
 	pod, err := c.client.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: %s/%s", ErrPodGone, ns, podName)
+		}
 		return nil, fmt.Errorf("collector: get pod %s/%s: %w", ns, podName, err)
 	}
 
@@ -116,6 +127,20 @@ func (c *K8sCollector) Collect(ctx context.Context, event watcher.FailureEvent) 
 			container.Name, cpuReq, cpuLimit, memReq, memLimit)
 	}
 	fmt.Fprintf(&buf, "\n")
+
+	// === PREVIOUS IMAGE ===
+	prevTag := c.previousImage(ctx, pod, event.ContainerName)
+	if prevTag != "" {
+		containerLabel := event.ContainerName
+		if containerLabel == "" {
+			containerLabel = "unknown"
+		}
+		fmt.Fprintf(&buf, "=== PREVIOUS IMAGE ===\n")
+		fmt.Fprintf(&buf, "Container: %s\n", containerLabel)
+		fmt.Fprintf(&buf, "Tag: %s\n", prevTag)
+		fmt.Fprintf(&buf, "Note: This was the last successfully running image tag before the current failure. It is provided as a rollback hint only — verify the tag still exists in the registry before using it.\n")
+		fmt.Fprintf(&buf, "\n")
+	}
 
 	// === RECENT EVENTS (last 5) ===
 	fmt.Fprintf(&buf, "=== RECENT EVENTS (last 5) ===\n")
@@ -221,6 +246,159 @@ func (c *K8sCollector) fetchLogs(ctx context.Context, ns, podName, containerName
 		return sb.String(), fmt.Errorf("read logs: %w", err)
 	}
 	return sb.String(), nil
+}
+
+// previousImage attempts to find the image tag that was running before the
+// current failing pod by walking pod → ReplicaSet → Deployment → old ReplicaSets.
+// Returns empty string on any error or if no previous RS can be found.
+func (c *K8sCollector) previousImage(ctx context.Context, pod *corev1.Pod, containerName string) string {
+	ns := pod.Namespace
+
+	// 1. Find the pod's owning ReplicaSet name.
+	var rsName string
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind == "ReplicaSet" {
+			rsName = ref.Name
+			break
+		}
+	}
+	if rsName == "" {
+		return ""
+	}
+
+	// 2. Fetch the current RS.
+	currentRS, err := c.client.AppsV1().ReplicaSets(ns).Get(ctx, rsName, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+
+	// 3. Find the owning Deployment name.
+	var deployName string
+	for _, ref := range currentRS.OwnerReferences {
+		if ref.Kind == "Deployment" {
+			deployName = ref.Name
+			break
+		}
+	}
+	if deployName == "" {
+		return ""
+	}
+
+	// 4. List all ReplicaSets in the namespace.
+	rsList, err := c.client.AppsV1().ReplicaSets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+
+	// 5. Determine the failing image tag from the current pod spec so we can
+	//    skip previous RSes that used the same bad tag.
+	failingTag := ""
+	for _, c := range pod.Spec.Containers {
+		if containerName == "" || c.Name == containerName {
+			if idx := strings.LastIndex(c.Image, ":"); idx >= 0 {
+				failingTag = c.Image[idx+1:]
+			}
+			break
+		}
+	}
+
+	// Collect all RSes owned by the same Deployment, excluding the current one,
+	// then sort by deployment.kubernetes.io/revision annotation descending (highest
+	// revision = most recently active). creationTimestamp is NOT used here because
+	// kubectl rollbacks reuse an existing RS (incrementing its revision without
+	// changing its creation time), so revision is the only reliable ordering key.
+	var candidates []*appsv1.ReplicaSet
+	for i := range rsList.Items {
+		rs := &rsList.Items[i]
+		if rs.Name == rsName {
+			continue
+		}
+		for _, ref := range rs.OwnerReferences {
+			if ref.Kind == "Deployment" && ref.Name == deployName {
+				candidates = append(candidates, rs)
+				break
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return rsRevision(candidates[i]) > rsRevision(candidates[j])
+	})
+
+	// Pick the most recent previous RS whose image tag differs from the
+	// currently failing tag. This skips over RSes from earlier failed
+	// deployments that share the same bad tag.
+	var prevRS *appsv1.ReplicaSet
+	for _, rs := range candidates {
+		tag := rsImageTag(rs, containerName)
+		if failingTag == "" || tag != failingTag {
+			prevRS = rs
+			break
+		}
+	}
+	if prevRS == nil {
+		return ""
+	}
+
+	// 6. Find the matching container image in the previous RS.
+	containers := prevRS.Spec.Template.Spec.Containers
+	if len(containers) == 0 {
+		return ""
+	}
+	image := ""
+	if containerName == "" {
+		image = containers[0].Image
+	} else {
+		for _, c := range containers {
+			if c.Name == containerName {
+				image = c.Image
+				break
+			}
+		}
+	}
+	if image == "" {
+		return ""
+	}
+
+	// Extract the tag portion (after the last ':').
+	if idx := strings.LastIndex(image, ":"); idx >= 0 {
+		return image[idx+1:]
+	}
+	return image
+}
+
+// rsRevision returns the integer value of the deployment.kubernetes.io/revision
+// annotation on a ReplicaSet. Returns 0 if the annotation is absent or unparseable.
+// Kubernetes increments this counter on every rollout, including rollbacks that
+// reuse an existing RS — making it a more reliable ordering key than creationTimestamp.
+func rsRevision(rs *appsv1.ReplicaSet) int64 {
+	if rs.Annotations == nil {
+		return 0
+	}
+	v := rs.Annotations["deployment.kubernetes.io/revision"]
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// rsImageTag extracts the tag portion of the image for the named container in
+// a ReplicaSet's pod template. If containerName is empty, the first container
+// is used. Returns empty string if the container is not found or has no tag.
+func rsImageTag(rs *appsv1.ReplicaSet, containerName string) string {
+	containers := rs.Spec.Template.Spec.Containers
+	for _, c := range containers {
+		if containerName == "" || c.Name == containerName {
+			if idx := strings.LastIndex(c.Image, ":"); idx >= 0 {
+				return c.Image[idx+1:]
+			}
+			return c.Image
+		}
+	}
+	return ""
 }
 
 // containerStateString formats a ContainerState as a human-readable string.

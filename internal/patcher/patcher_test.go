@@ -386,6 +386,149 @@ metadata:
 	}
 }
 
+func TestManifestPatcher_ApplyImageTag_Kustomize(t *testing.T) {
+	// Copy kustomization fixture into a temp dir as "kustomization.yaml" (no deployment YAML present).
+	content, err := os.ReadFile("testdata/kustomization-imagepull.yaml")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "kustomization.yaml")
+	if err := os.WriteFile(dst, content, 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	_ = dst
+
+	p := NewManifestPatcher()
+	diag := diagnostician.Diagnosis{
+		FailureType: "ImagePullBackOff",
+		PatchType:   "image_tag",
+		PatchValue:  "sha-8644a17",
+		Remediable:  true,
+	}
+	event := watcher.FailureEvent{
+		PodName:   "sample-app-abc12-xyz99",
+		Namespace: "remediator-test",
+	}
+
+	result, err := p.Apply(context.Background(), dir, diag, event)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	newStr := string(result.NewContent)
+	if !strings.Contains(newStr, "newTag: sha-8644a17") {
+		t.Errorf("expected new content to contain 'newTag: sha-8644a17', got:\n%s", newStr)
+	}
+	if strings.Contains(newStr, "old-sha-abc123") {
+		t.Errorf("expected new content to NOT contain 'old-sha-abc123', got:\n%s", newStr)
+	}
+	if !strings.HasSuffix(result.FilePath, "kustomization.yaml") {
+		t.Errorf("expected FilePath to end with 'kustomization.yaml', got: %s", result.FilePath)
+	}
+}
+
+func TestManifestPatcher_ApplyImageTag_FallbackToDeployment(t *testing.T) {
+	// Use existing deployment-imagepull.yaml with no kustomization.yaml in the temp dir.
+	dir, _ := copyFixture(t, "testdata/deployment-imagepull.yaml")
+
+	p := NewManifestPatcher()
+	diag := diagnostician.Diagnosis{
+		FailureType: "ImagePullBackOff",
+		PatchType:   "image_tag",
+		PatchValue:  "1.26.0",
+		Remediable:  true,
+	}
+	event := watcher.FailureEvent{
+		PodName:       "sample-app-abc12-xyz99",
+		Namespace:     "remediator-test",
+		ContainerName: "app",
+	}
+
+	result, err := p.Apply(context.Background(), dir, diag, event)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	newStr := string(result.NewContent)
+	if !strings.Contains(newStr, "image: nginx:1.26.0") {
+		t.Errorf("expected new content to contain 'image: nginx:1.26.0', got:\n%s", newStr)
+	}
+}
+
+func TestApplyKustomizationImageTag_UpdatesExistingTag(t *testing.T) {
+	input := []byte(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: sample-app
+  newName: ghcr.io/mhever/sample-app
+  newTag: old-sha
+`)
+	result, err := applyKustomizationImageTag(input, "sample-app", "sha-8644a17")
+	if err != nil {
+		t.Fatalf("applyKustomizationImageTag: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "newTag: sha-8644a17") {
+		t.Errorf("expected 'newTag: sha-8644a17' in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "old-sha") {
+		t.Errorf("expected 'old-sha' to be replaced, got:\n%s", out)
+	}
+}
+
+func TestApplyKustomizationImageTag_InsertsNewTag(t *testing.T) {
+	// Entry has name: and newName: but no newTag:
+	input := []byte(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: sample-app
+  newName: ghcr.io/mhever/sample-app
+`)
+	result, err := applyKustomizationImageTag(input, "sample-app", "sha-8644a17")
+	if err != nil {
+		t.Fatalf("applyKustomizationImageTag: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "newTag: sha-8644a17") {
+		t.Errorf("expected inserted 'newTag: sha-8644a17' in output, got:\n%s", out)
+	}
+	// Verify the inserted line has correct indentation (2 spaces past the '-' position)
+	// The '-' is at column 0, so fields should be at 2 spaces.
+	if !strings.Contains(out, "  newTag: sha-8644a17") {
+		t.Errorf("expected indented '  newTag: sha-8644a17' in output, got:\n%s", out)
+	}
+}
+
+func TestContainsKustomizationImage(t *testing.T) {
+	validKustomization := `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+- name: sample-app
+  newName: ghcr.io/mhever/sample-app
+  newTag: sha-abc
+`
+	// True case: matching name
+	if !containsKustomizationImage(validKustomization, "sample-app") {
+		t.Error("expected true for kustomization with matching image name")
+	}
+
+	// False case: different image name
+	if containsKustomizationImage(validKustomization, "other-app") {
+		t.Error("expected false for kustomization with different image name")
+	}
+
+	// False case: no images block
+	noImages := `apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- deployment.yaml
+`
+	if containsKustomizationImage(noImages, "sample-app") {
+		t.Error("expected false for kustomization with no images block")
+	}
+}
+
 func TestDeploymentName_StatefulSetPod(t *testing.T) {
 	// StatefulSet pod names use <name>-<ordinal> pattern. Stripping two segments
 	// is incorrect for ordinal-style names (see deploymentName doc comment).

@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -56,15 +58,22 @@ type OpenRouterDiagnostician struct {
 	baseURL string
 	// model is the model identifier to use. Defaults to "deepseek/deepseek-r1".
 	model string
+	// LogDisabled is true when the log directory could not be created at
+	// construction time. diagLog checks this flag and returns immediately
+	// without logging, avoiding repeated ERROR log lines.
+	LogDisabled bool
 }
 
 // NewOpenRouterDiagnostician creates a new OpenRouterDiagnostician.
 // httpClient may be nil, in which case a default client with 120s timeout is used.
+// If the log directory cannot be created, LogDisabled is set to true and a
+// single WARN is emitted; diagLog will be a no-op for the lifetime of this
+// instance.
 func NewOpenRouterDiagnostician(apiKey, logPath string, httpClient *http.Client, logger *slog.Logger) *OpenRouterDiagnostician {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 120 * time.Second}
 	}
-	return &OpenRouterDiagnostician{
+	d := &OpenRouterDiagnostician{
 		apiKey:     apiKey,
 		logPath:    logPath,
 		httpClient: httpClient,
@@ -72,6 +81,19 @@ func NewOpenRouterDiagnostician(apiKey, logPath string, httpClient *http.Client,
 		baseURL:    "https://openrouter.ai/api/v1",
 		model:      "deepseek/deepseek-r1",
 	}
+	// Check if logPath itself is a directory (e.g. DIAGNOSTICIAN_LOG_PATH=/tmp/).
+	if fi, err := os.Stat(logPath); err == nil && fi.IsDir() {
+		logger.Warn("DIAGNOSTICIAN_LOG_PATH is a directory, not a file — prompt/response logging disabled. Set it to a file path, e.g. /tmp/remediator-diagnostician.log",
+			"path", logPath)
+		d.LogDisabled = true
+		return d
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		logger.Warn("diagnostician log directory unavailable, prompt/response logging disabled",
+			"path", filepath.Dir(logPath), "error", err)
+		d.LogDisabled = true
+	}
+	return d
 }
 
 var _ Diagnostician = (*OpenRouterDiagnostician)(nil)

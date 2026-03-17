@@ -143,6 +143,11 @@ func main() {
 				metrics.FailuresDetected.WithLabelValues(string(e.FailureType)).Inc()
 
 				bundle, err := setup.col.Collect(ctx, e)
+				if errors.Is(err, collector.ErrPodGone) {
+					slog.Warn("pod gone before collection, skipping stale event",
+						"pod", e.PodName, "type", e.FailureType)
+					continue
+				}
 				if err != nil {
 					slog.Error("collector failed", "error", err, "pod", e.PodName)
 					continue
@@ -164,6 +169,16 @@ func main() {
 				}
 
 				prURL, err := g.OpenPR(ctx, gitops.PRRequest{Diag: *diagnosis, Event: e})
+				if errors.Is(err, gitops.ErrBranchExists) {
+					slog.Info("skipping duplicate event â remediation branch already exists",
+						"pod", e.PodName, "type", e.FailureType)
+					continue
+				}
+				if errors.Is(err, gitops.ErrNothingToCommit) {
+					slog.Warn("patch produced no diff — GitOps repo already reflects desired state, no PR needed",
+						"pod", e.PodName, "type", e.FailureType)
+					continue
+				}
 				if err != nil {
 					slog.Error("failed to open PR", "error", err, "pod", e.PodName)
 					continue

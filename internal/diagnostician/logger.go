@@ -12,7 +12,11 @@ import (
 // For PROMPT entries, tokens should be an empty string.
 // Errors opening or writing the log file are not fatal — they are logged to slog
 // but do not block the main Diagnose flow.
+// If d.LogDisabled is true, diagLog is a no-op.
 func (d *OpenRouterDiagnostician) diagLog(label, content, tokens string) {
+	if d.LogDisabled {
+		return
+	}
 	f, err := os.OpenFile(d.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		d.logger.Error("diagLog: failed to open log file", "path", d.logPath, "error", err)

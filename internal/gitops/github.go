@@ -83,6 +83,13 @@ func buildPRBody(req PRRequest, diff string) string {
 		req.Diag.ReasoningSummary,
 	)
 
+	if req.Diag.PatchType == "image_tag" {
+		body += `
+
+> [!WARNING]
+> **Image tag not verified.** The proposed tag was suggested by the AI based on available context (including the previously running tag if found). It may not exist in the registry. **Do not merge without verifying the tag is valid.** Check available tags before merging.`
+	}
+
 	if diff != "" {
 		body += "\n\n### Patch Diff\n```diff\n" + diff + "\n```"
 	}

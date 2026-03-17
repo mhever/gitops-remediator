@@ -55,6 +55,29 @@ func TestDeduplicator(t *testing.T) {
 		}
 	})
 
+	t.Run("same pod different container name is duplicate", func(t *testing.T) {
+		// Reproduces the real-world case where the watcher fires two events for
+		// the same pod failure: first with ContainerName="" (ContainerCreating),
+		// then with ContainerName="app" (ErrImagePull). Both must be deduped.
+		d := newDeduplicator()
+		e1 := FailureEvent{
+			Namespace:     "ns",
+			PodName:       "pod",
+			ContainerName: "",
+			FailureType:   FailureTypeImagePullBackOff,
+		}
+		e2 := FailureEvent{
+			Namespace:     "ns",
+			PodName:       "pod",
+			ContainerName: "app",
+			FailureType:   FailureTypeImagePullBackOff,
+		}
+		d.isDuplicate(e1) // first event records the key
+		if got := d.isDuplicate(e2); got != true {
+			t.Errorf("isDuplicate(e2 with real container name) = %v, want true (same pod/type)", got)
+		}
+	})
+
 	t.Run("different key returns false independently", func(t *testing.T) {
 		d := newDeduplicator()
 		e1 := FailureEvent{

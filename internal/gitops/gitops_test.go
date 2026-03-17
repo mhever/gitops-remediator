@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -161,9 +162,16 @@ func TestGitHubGitOps_PatcherError(t *testing.T) {
 	ctx := context.Background()
 	remotePath := setupBareRepo(t)
 
-	apiCalled := false
+	prCreationCalled := false
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiCalled = true
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/owner/testrepo/branches/") {
+			// Branch does not exist — proceed normally.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/repos/owner/testrepo/pulls" {
+			prCreationCalled = true
+		}
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer ts.Close()
@@ -191,8 +199,8 @@ func TestGitHubGitOps_PatcherError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when patcher fails, got nil")
 	}
-	if apiCalled {
-		t.Error("expected GitHub API to NOT be called when patcher fails")
+	if prCreationCalled {
+		t.Error("expected PR creation endpoint to NOT be called when patcher fails")
 	}
 }
 
@@ -316,9 +324,154 @@ func TestGitHubGitOps_Ping_ChecksAuthHeader(t *testing.T) {
 	}
 }
 
+func TestGitHubGitOps_OpenPR_DuplicateBranch(t *testing.T) {
+	ctx := context.Background()
+
+	// Track whether the PR creation endpoint was called.
+	prCreationCalled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/owner/testrepo/branches/") {
+			// Simulate branch already existing.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"name":"remediation/OOMKilled-dup-pod-0"}`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/repos/owner/testrepo/pulls" {
+			prCreationCalled = true
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"html_url":"https://github.com/owner/testrepo/pull/99"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	// Point cloneURL to a path that would fail git clone if reached.
+	g.cloneURL = "/nonexistent-path-that-must-not-be-cloned"
+	g.baseGitHubURL = ts.URL
+
+	req := PRRequest{
+		Diag: diagnostician.Diagnosis{
+			FailureType: "OOMKilled",
+			PatchType:   "memory_limit",
+			PatchValue:  "256Mi",
+			Remediable:  true,
+		},
+		Event: watcher.FailureEvent{
+			PodName:   "dup-pod",
+			Namespace: "default",
+		},
+	}
+
+	prURL, err := g.OpenPR(ctx, req)
+	if prURL != "" {
+		t.Errorf("expected empty prURL, got %q", prURL)
+	}
+	if !errors.Is(err, ErrBranchExists) {
+		t.Errorf("expected ErrBranchExists, got: %v", err)
+	}
+	if prCreationCalled {
+		t.Error("expected PR creation endpoint NOT to be called for a duplicate branch")
+	}
+}
+
+func TestGitHubGitOps_OpenPR_BranchCheckError(t *testing.T) {
+	ctx := context.Background()
+	remotePath := setupBareRepo(t)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/repos/owner/testrepo/branches/") {
+			// Simulate a flaky branch check returning 500.
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/repos/owner/testrepo/pulls" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprintf(w, `{"html_url":"https://github.com/owner/testrepo/pull/2"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	g.cloneURL = remotePath
+	g.baseGitHubURL = ts.URL
+
+	req := PRRequest{
+		Diag: diagnostician.Diagnosis{
+			FailureType: "OOMKilled",
+			PatchType:   "memory_limit",
+			PatchValue:  "256Mi",
+			Remediable:  true,
+		},
+		Event: watcher.FailureEvent{
+			PodName:   "sample-app-abc12-xyz99",
+			Namespace: "remediator-test",
+		},
+	}
+
+	prURL, err := g.OpenPR(ctx, req)
+	if err != nil {
+		t.Fatalf("expected nil error when branch check returns 500 (flaky), got: %v", err)
+	}
+	if prURL != "https://github.com/owner/testrepo/pull/2" {
+		t.Errorf("expected PR URL 'https://github.com/owner/testrepo/pull/2', got %q", prURL)
+	}
+}
+
 // errorPatcher always returns an error.
 type errorPatcher struct{}
 
 func (e *errorPatcher) Apply(ctx context.Context, repoDir string, diag diagnostician.Diagnosis, event watcher.FailureEvent) (*patcher.PatchResult, error) {
 	return nil, fmt.Errorf("patcher: simulated error")
+}
+
+func TestBuildPRBody_ImageTagWarningPresent(t *testing.T) {
+	req := PRRequest{
+		Diag: diagnostician.Diagnosis{
+			FailureType:      "ImagePullBackOff",
+			PatchType:        "image_tag",
+			PatchValue:       "sha-abc123",
+			RootCause:        "wrong image tag",
+			ReasoningSummary: "previous tag was sha-abc123",
+			Remediable:       true,
+		},
+		Event: watcher.FailureEvent{
+			PodName:   "my-pod",
+			Namespace: "default",
+		},
+	}
+
+	body := buildPRBody(req, "")
+	if !strings.Contains(body, "[!WARNING]") {
+		t.Errorf("expected PR body to contain '[!WARNING]' for image_tag patch type, got:\n%s", body)
+	}
+}
+
+func TestBuildPRBody_NoImageTagWarningForOtherPatchTypes(t *testing.T) {
+	req := PRRequest{
+		Diag: diagnostician.Diagnosis{
+			FailureType:      "OOMKilled",
+			PatchType:        "memory_limit",
+			PatchValue:       "256Mi",
+			RootCause:        "OOM",
+			ReasoningSummary: "increased memory limit",
+			Remediable:       true,
+		},
+		Event: watcher.FailureEvent{
+			PodName:   "my-pod",
+			Namespace: "default",
+		},
+	}
+
+	body := buildPRBody(req, "")
+	if strings.Contains(body, "[!WARNING]") {
+		t.Errorf("expected PR body NOT to contain '[!WARNING]' for memory_limit patch type, got:\n%s", body)
+	}
 }

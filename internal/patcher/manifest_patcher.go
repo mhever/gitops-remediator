@@ -27,26 +27,57 @@ var _ Patcher = (*ManifestPatcher)(nil)
 func (p *ManifestPatcher) Apply(ctx context.Context, repoDir string, diag diagnostician.Diagnosis, event watcher.FailureEvent) (*PatchResult, error) {
 	name := deploymentName(event.PodName)
 
-	filePath, err := findManifest(repoDir, name)
-	if err != nil {
-		return nil, fmt.Errorf("patcher: %w", err)
-	}
+	var (
+		filePath   string
+		oldContent []byte
+		newContent []byte
+		err        error
+	)
 
-	oldContent, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("patcher: read manifest: %w", err)
-	}
-
-	var newContent []byte
 	switch diag.PatchType {
-	case "memory_limit":
-		newContent, err = applyMemoryLimit(oldContent, event.ContainerName, diag.PatchValue)
-	case "env_var":
-		newContent, err = applyEnvVar(oldContent, diag.PatchValue)
 	case "image_tag":
-		newContent, err = applyImageTag(oldContent, event.ContainerName, diag.PatchValue)
+		imageName := name
+		kustomizationPath, findErr := findKustomization(repoDir, imageName)
+		if findErr != nil {
+			return nil, fmt.Errorf("patcher: find kustomization: %w", findErr)
+		}
+		if kustomizationPath != "" {
+			// Kustomize path: read the kustomization file and patch it
+			oldContent, err = os.ReadFile(kustomizationPath)
+			if err != nil {
+				return nil, fmt.Errorf("patcher: read kustomization: %w", err)
+			}
+			filePath = kustomizationPath
+			newContent, err = applyKustomizationImageTag(oldContent, imageName, diag.PatchValue)
+		} else {
+			// Fallback: find and patch image: line in deployment YAML
+			filePath, err = findManifest(repoDir, name)
+			if err != nil {
+				return nil, fmt.Errorf("patcher: %w", err)
+			}
+			oldContent, err = os.ReadFile(filePath)
+			if err != nil {
+				return nil, fmt.Errorf("patcher: read manifest: %w", err)
+			}
+			newContent, err = applyImageTag(oldContent, event.ContainerName, diag.PatchValue)
+		}
 	default:
-		return nil, fmt.Errorf("patcher: unknown patch type %q", diag.PatchType)
+		filePath, err = findManifest(repoDir, name)
+		if err != nil {
+			return nil, fmt.Errorf("patcher: %w", err)
+		}
+		oldContent, err = os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("patcher: read manifest: %w", err)
+		}
+		switch diag.PatchType {
+		case "memory_limit":
+			newContent, err = applyMemoryLimit(oldContent, event.ContainerName, diag.PatchValue)
+		case "env_var":
+			newContent, err = applyEnvVar(oldContent, diag.PatchValue)
+		default:
+			return nil, fmt.Errorf("patcher: unknown patch type %q", diag.PatchType)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("patcher: apply patch: %w", err)

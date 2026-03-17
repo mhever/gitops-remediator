@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -271,6 +272,33 @@ func TestOpenRouterDiagnostician_Ping_SendsCorrectHeaders(t *testing.T) {
 	err := d.Ping(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error from Ping with correct headers, got: %v", err)
+	}
+}
+
+func TestNewOpenRouterDiagnostician_LogDirCreated(t *testing.T) {
+	base := t.TempDir()
+	// Construct a log path whose parent directory does not yet exist.
+	logPath := filepath.Join(base, "subdir", "nested", "diag.log")
+
+	d := NewOpenRouterDiagnostician("key", logPath, nil, slog.Default())
+
+	if d.LogDisabled {
+		t.Error("expected LogDisabled=false when directory can be created")
+	}
+	dir := filepath.Dir(logPath)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Errorf("expected log directory %q to exist after construction, but it does not", dir)
+	}
+}
+
+func TestNewOpenRouterDiagnostician_LogDirUnwritable(t *testing.T) {
+	// Use a path that is guaranteed to be impossible to create.
+	logPath := "/nonexistent-root-path/sub/diag.log"
+
+	d := NewOpenRouterDiagnostician("key", logPath, nil, slog.Default())
+
+	if !d.LogDisabled {
+		t.Error("expected LogDisabled=true when log directory cannot be created")
 	}
 }
 

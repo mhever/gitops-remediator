@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,8 @@ type K8sWatcher struct {
 	events    chan<- FailureEvent
 	logger    *slog.Logger
 	dedup     *deduplicator
+	synced    atomic.Bool
+	startTime time.Time
 }
 
 // Compile-time interface check.
@@ -71,6 +74,7 @@ func NewK8sWatcher(client kubernetes.Interface, namespace string, events chan<- 
 		events:    events,
 		logger:    logger,
 		dedup:     newDeduplicator(),
+		startTime: time.Now(),
 	}
 }
 
@@ -107,19 +111,25 @@ func (w *K8sWatcher) Run(ctx context.Context) error {
 	}
 
 	factory.Start(ctx.Done())
-	synced := factory.WaitForCacheSync(ctx.Done())
-	for informerType, ok := range synced {
+	syncedMap := factory.WaitForCacheSync(ctx.Done())
+	for informerType, ok := range syncedMap {
 		if !ok {
 			w.logger.Warn("informer cache sync failed", "type", fmt.Sprintf("%T", informerType))
 		}
 	}
+	w.synced.Store(true)
 
 	<-ctx.Done()
 	return ctx.Err()
 }
 
 // handlePodUpdate processes pod add/update events and emits FailureEvents.
-func (w *K8sWatcher) handlePodUpdate(_, newObj interface{}) {
+// When oldObj is nil (AddFunc path), it skips processing until the cache is synced
+// to avoid replaying stale pods present at startup.
+func (w *K8sWatcher) handlePodUpdate(oldObj, newObj interface{}) {
+	if oldObj == nil && !w.synced.Load() {
+		return // skip initial list replay before cache sync
+	}
 	pod, ok := newObj.(*corev1.Pod)
 	if !ok {
 		w.logger.Warn("handlePodUpdate: unexpected object type", "type", newObj)
@@ -147,6 +157,11 @@ func (w *K8sWatcher) handleEventAdd(obj interface{}) {
 	event, ok := obj.(*corev1.Event)
 	if !ok {
 		w.logger.Warn("handleEventAdd: unexpected object type", "type", obj)
+		return
+	}
+
+	// Skip events that predate this watcher's startup.
+	if !event.LastTimestamp.IsZero() && event.LastTimestamp.Time.Before(w.startTime) {
 		return
 	}
 

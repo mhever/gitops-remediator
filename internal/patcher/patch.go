@@ -180,6 +180,84 @@ func applyImageTag(content []byte, containerName, newTag string) ([]byte, error)
 	return nil, fmt.Errorf("applyImageTag: no image: line found")
 }
 
+// applyKustomizationImageTag finds the images: entry with the given imageName
+// and updates its newTag: value to newTag.
+// If the entry has no newTag: line, one is inserted after the entry's last field.
+// Returns an error if the imageName entry is not found.
+func applyKustomizationImageTag(content []byte, imageName, newTag string) ([]byte, error) {
+	lines := strings.Split(string(content), "\n")
+
+	imagesIndent := -1
+	inImages := false
+	entryIndent := -1
+	inEntry := false
+	entryLastLine := -1
+
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+
+		if !inImages {
+			if trimmed == "images:" {
+				imagesIndent = indent
+				inImages = true
+			}
+			continue
+		}
+
+		// Exit images block when we see a non-list line at or below images: indentation.
+		// List items (starting with "-") at the images: indent level are valid block members.
+		if indent <= imagesIndent && !strings.HasPrefix(trimmed, "-") {
+			break
+		}
+
+		if !inEntry {
+			// Look for the entry start: "- name: <imageName>"
+			withoutDash := strings.TrimPrefix(trimmed, "- ")
+			if withoutDash == "name: "+imageName {
+				entryIndent = indent
+				inEntry = true
+				entryLastLine = i
+			}
+			continue
+		}
+
+		// We are inside the matching entry.
+		// The entry ends when we see another list item at the entry's indent level,
+		// or a non-list line at or below entry indent level.
+		if indent <= entryIndent {
+			break
+		}
+
+		// Still inside the entry — track last non-empty line and check for newTag.
+		entryLastLine = i
+
+		if strings.HasPrefix(trimmed, "newTag:") {
+			// Replace in place, preserving indentation
+			prefix := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = prefix + "newTag: " + newTag
+			return []byte(strings.Join(lines, "\n")), nil
+		}
+	}
+
+	if !inEntry {
+		return nil, fmt.Errorf("applyKustomizationImageTag: image entry %q not found", imageName)
+	}
+
+	// No newTag: line found in entry; insert one after entryLastLine.
+	// Indentation: entry's "-" is at entryIndent; fields are at entryIndent+2.
+	fieldIndent := strings.Repeat(" ", entryIndent+2)
+	newLine := fieldIndent + "newTag: " + newTag
+	result := make([]string, 0, len(lines)+1)
+	result = append(result, lines[:entryLastLine+1]...)
+	result = append(result, newLine)
+	result = append(result, lines[entryLastLine+1:]...)
+	return []byte(strings.Join(result, "\n")), nil
+}
+
 // unifiedDiff generates a unified diff of oldContent vs newContent for filePath.
 // It writes both contents to temp files and runs diff -u.
 func unifiedDiff(oldContent, newContent []byte, filePath string) string {

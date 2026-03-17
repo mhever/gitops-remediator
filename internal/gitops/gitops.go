@@ -2,10 +2,21 @@ package gitops
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mhever/gitops-remediator/internal/diagnostician"
 	"github.com/mhever/gitops-remediator/internal/watcher"
 )
+
+// ErrBranchExists is returned by OpenPR when a remediation branch for this
+// event already exists, indicating the event is a duplicate.
+var ErrBranchExists = errors.New("remediation branch already exists")
+
+// ErrNothingToCommit is returned by OpenPR when the proposed patch produces no
+// diff against the GitOps repo. This happens when the repo already reflects the
+// desired state — for example, when kubectl set image was used to force a broken
+// image directly on the cluster without updating the GitOps repo first.
+var ErrNothingToCommit = errors.New("patch produced no changes — repo already reflects desired state")
 
 // PRRequest contains all information needed to open a remediation PR.
 type PRRequest struct {

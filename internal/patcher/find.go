@@ -56,6 +56,78 @@ func containsDeploymentWithName(content, name string) bool {
 	return false
 }
 
+// containsKustomizationImage returns true if content contains an images: block
+// with an entry whose name: field equals imageName.
+// Implemented line-by-line (no YAML parse) consistent with the rest of the package.
+func containsKustomizationImage(content, imageName string) bool {
+	lines := strings.Split(content, "\n")
+	imagesIndent := -1
+	inImages := false
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+
+		if !inImages {
+			if trimmed == "images:" {
+				imagesIndent = indent
+				inImages = true
+			}
+			continue
+		}
+
+		// Exit images block when we see a non-list line at or below images: indentation.
+		// List items (starting with "-") at the images: indent level are valid block members.
+		if indent <= imagesIndent && !strings.HasPrefix(trimmed, "-") {
+			break
+		}
+
+		// Match "- name: <imageName>" or "name: <imageName>"
+		withoutDash := strings.TrimPrefix(trimmed, "- ")
+		if withoutDash == "name: "+imageName {
+			return true
+		}
+	}
+	return false
+}
+
+// findKustomization walks repoDir looking for a kustomization.yaml (or .yml)
+// that contains an images: entry with name matching imageName.
+// Returns the absolute path of the first match, or ("", nil) if none found
+// (not an error — caller falls back to findManifest).
+func findKustomization(repoDir, imageName string) (string, error) {
+	var found string
+	err := filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		base := strings.ToLower(filepath.Base(path))
+		if base != "kustomization.yaml" && base != "kustomization.yml" {
+			return nil
+		}
+
+		contentBytes, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil // skip unreadable files
+		}
+
+		if containsKustomizationImage(string(contentBytes), imageName) {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("findKustomization: walk error: %w", err)
+	}
+	return found, nil
+}
+
 // findManifest walks repoDir recursively, looking for a .yaml or .yml file
 // that contains a Deployment or StatefulSet with metadata.name equal to name.
 // Returns the absolute file path of the first match, or an error if none found.
