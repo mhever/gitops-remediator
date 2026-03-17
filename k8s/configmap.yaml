@@ -5,6 +5,6 @@ metadata:
   namespace: remediator-system
 data:
   REMEDIATOR_NAMESPACE: "remediator-test"
-  GITOPS_REPO: "mhever/gitops-remediator"
+  GITOPS_REPO: "mhever/sample-app"
   DIAGNOSTICIAN_LOG_PATH: "/var/log/remediator/diagnostician.log"
   METRICS_ADDR: ":9090"

@@ -19,16 +19,37 @@ Be critical. Your job is to catch problems before they accumulate into hard-to-d
 - [ ] No unnecessary type assertions without safety checks
 - [ ] Interface satisfaction is explicit where useful (compile-time check: `var _ Interface = (*Impl)(nil)`)
 - [ ] `defer` used correctly (especially for cleanup)
+- [ ] Happy path reads linearly down the left margin — errors and guard clauses returned early, not buried in else-branches or nested blocks
 
 ### Test Coverage
 - [ ] Every exported function has at least one test
 - [ ] Error paths tested, not just happy paths
 - [ ] No test that can pass vacuously (empty mocks that never assert)
 
-### Security (heightened attention for these packages)
-- `internal/collector/`: Verify `sanitize()` redacts env var **values** while preserving keys. Check for any other PII vectors.
-- `internal/diagnostician/`: Verify the full prompt is logged **before** sending. Verify token counts are captured from response metadata.
-- `internal/gitops/`: Verify GitHub token is never logged. Verify temp directory is cleaned up.
+### Security
+
+**Credentials and secrets**
+- [ ] API keys and tokens (OpenRouter, GitHub) are never logged, never included in error messages, never written to disk
+- [ ] No credentials in default values, comments, or test fixtures
+
+**Injection**
+- [ ] YAML patcher: values written into manifests are treated as data, never interpolated into a format string or shell command
+- [ ] Prompt injection: pod log content and event messages reach the LLM — verify they cannot escape the `<diagnostic_bundle>` boundary to hijack instructions
+- [ ] Git operations: branch names and commit messages derived from pod/namespace names must not allow shell injection if ever passed through `exec.Command`
+
+**Input validation at trust boundaries**
+- [ ] LLM response is parsed defensively — malformed or unexpected JSON does not panic or silently corrupt a `Diagnosis`
+- [ ] GitHub API responses validated before use (status codes checked, body not blindly trusted)
+
+**Resource safety**
+- [ ] Temp directories created during git clone are always cleaned up (defer + error log on failure)
+- [ ] HTTP response bodies always closed, even on error paths
+- [ ] No unbounded reads from external responses (`io.LimitReader` or equivalent where appropriate)
+
+**Package-specific checks**
+- `internal/collector/`: `sanitize()` redacts env var **values** while preserving keys; no other PII (image pull secrets, volume content) leaks into the bundle
+- `internal/diagnostician/`: full prompt logged **before** sending; token counts captured from response metadata
+- `internal/gitops/`: GitHub token never appears in logs, PR body, or branch names
 
 ### Scope Discipline
 - [ ] No code added beyond what the spec requires

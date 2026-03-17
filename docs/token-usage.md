@@ -1,6 +1,6 @@
 # Token Usage
 
-This document will be populated with real DeepSeek R1 token consumption data from live runs once the remediator is deployed to the k3s cluster.
+This document will be populated with real OpenRouter (DeepSeek R1) token consumption data from live runs once the remediator is deployed to the k3s cluster.
 
 ## Fields logged per call
 

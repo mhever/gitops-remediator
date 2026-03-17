@@ -1,6 +1,6 @@
 # gitops-remediator
 
-A Go service that watches a Kubernetes namespace for failure events, uses DeepSeek R1 for LLM-assisted root cause analysis, and opens GitHub PRs against a GitOps repository with proposed configuration fixes. FluxCD reconciles the merged PR back to the cluster, closing the loop.
+A Go service that watches a Kubernetes namespace for failure events, uses DeepSeek R1 (via OpenRouter) for LLM-assisted root cause analysis, and opens GitHub PRs against a GitOps repository with proposed configuration fixes. FluxCD reconciles the merged PR back to the cluster, closing the loop.
 
 Built as a portfolio piece demonstrating Go development, Kubernetes operations, LLM integration, GitOps principles, and agentic system design.
 
@@ -22,7 +22,7 @@ k3s cluster
               ├─ 2. Collector
               │      assembles: pod spec (sanitised), logs, events, resource limits
               │
-              ├─ 3. Diagnostician → DeepSeek R1
+              ├─ 3. Diagnostician → OpenRouter (DeepSeek R1)
               │      returns: failure_type, root_cause, remediable, patch_type, patch_value
               │
               └─ 4. Patcher + GitOps
@@ -36,7 +36,7 @@ k3s cluster
 
 **Why PRs over direct `kubectl apply`**: Direct patching creates drift between Git and the cluster — the opposite of GitOps. The PR is the artifact. It produces a visible, reviewable trail of automated decision-making and honours the source-of-truth principle.
 
-**Why DeepSeek R1**: Called from Go via raw `net/http` against DeepSeek's OpenAI-compatible API. R1's reasoning trace is logged alongside the structured output and included in the PR description. Full prompt + response written to file for token usage analysis and debugging.
+**Why DeepSeek R1 via OpenRouter**: Called from Go via raw `net/http` against OpenRouter's OpenAI-compatible API (`openrouter.ai/api/v1`). Routing through OpenRouter avoids direct DeepSeek API dependency and enables model switching without code changes. R1's reasoning trace is logged alongside the structured output and included in the PR description. Full prompt + response written to file for token usage analysis and debugging.
 
 **Why plain-text diagnostic bundles**: LLMs parse structured plain text better than JSON blobs for reasoning tasks. Lesson carried over from [homelab-mcp](https://github.com/mhever/homelab-mcp).
 
@@ -76,8 +76,8 @@ Served at `:9090/metrics`.
 
 - k3s cluster with a `remediator-test` namespace
 - FluxCD watching a GitOps repository
-- DeepSeek API key (`api.deepseek.com`)
-- GitHub personal access token with repo write access
+- OpenRouter API key (`openrouter.ai`)
+- GitHub personal access token with repo write access to `mhever/sample-app`
 
 ### Test environment
 
@@ -101,9 +101,9 @@ kubectl set env deployment/sample-app DATABASE_URL=invalid -n remediator-test
 go build ./cmd/remediator/
 
 KUBECONFIG=~/.kube/config \
-DEEPSEEK_API_KEY=sk-... \
+OPENROUTER_API_KEY=sk-or-... \
 GITHUB_TOKEN=ghp_... \
-GITOPS_REPO=mhever/your-gitops-repo \
+GITOPS_REPO=mhever/sample-app \
 ./remediator
 ```
 
@@ -118,7 +118,7 @@ kubectl create namespace remediator-system
 # Create credentials (do not commit real values)
 kubectl create secret generic gitops-remediator-secrets \
   --namespace=remediator-system \
-  --from-literal=deepseek-api-key=sk-... \
+  --from-literal=openrouter-api-key=sk-or-... \
   --from-literal=github-token=ghp_...
 
 # Edit k8s/configmap.yaml with your repo name, then apply everything
@@ -135,7 +135,7 @@ gitops-remediator/
 ├── internal/
 │   ├── watcher/                  # client-go SharedInformer, failure detection, dedup
 │   ├── collector/                # diagnostic bundle assembly, PII sanitisation
-│   ├── diagnostician/            # DeepSeek R1 API call, response parsing
+│   ├── diagnostician/            # OpenRouter API call (DeepSeek R1), response parsing
 │   ├── patcher/                  # YAML manifest patching
 │   ├── gitops/                   # git clone/commit/push, GitHub PR via REST API
 │   └── metrics/                  # Prometheus metrics
@@ -145,7 +145,7 @@ gitops-remediator/
 ├── docs/
 │   ├── diagnostician-prompt.md   # prompt design, failure taxonomy, escalation logic
 │   ├── pii-decision.md           # env var redaction rationale
-│   └── token-usage.md            # DeepSeek token consumption (populated after live runs)
+│   └── token-usage.md            # OpenRouter token consumption (populated after live runs)
 └── tasks/lessons.md              # per-phase model behaviour observations
 ```
 

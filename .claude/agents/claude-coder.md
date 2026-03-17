@@ -24,6 +24,29 @@ You are the implementation agent for gitops-remediator. You write Go code and te
 - Interfaces defined in the package that owns the type; implementations may live in the same or a separate file.
 - All exported types and functions require a doc comment.
 
+## Happy Path Idiom (mandatory)
+
+Go code must be structured so the happy path reads linearly down the left margin. Errors, guard clauses, and edge cases are handled first and returned early — keeping them indented and out of the way.
+
+```go
+// CORRECT — happy path on the left
+result, err := doThing()
+if err != nil {
+    return fmt.Errorf("do thing: %w", err)
+}
+useResult(result) // happy path continues here, unindented
+
+// WRONG — happy path buried in else / nested block
+result, err := doThing()
+if err == nil {
+    useResult(result)
+} else {
+    return fmt.Errorf("do thing: %w", err)
+}
+```
+
+Apply this at every level: function bodies, switch cases, loop iterations. A reviewer seeing deeply nested happy-path logic will FAIL the review.
+
 ## When You're Done
 
 Return:
