@@ -18,6 +18,11 @@ type GitOps interface {
 	OpenPR(ctx context.Context, req PRRequest) (string, error)
 }
 
+// Pinger can perform a lightweight connectivity check against the GitOps provider.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 // NoopGitOps satisfies GitOps without doing anything.
 type NoopGitOps struct{}
 

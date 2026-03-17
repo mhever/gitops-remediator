@@ -212,6 +212,68 @@ func TestOpenRouterDiagnostician_MalformedJSON(t *testing.T) {
 	}
 }
 
+func TestOpenRouterDiagnostician_Ping_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(makeChatResponse("ok", 5, 1, 6))
+	}))
+	defer server.Close()
+
+	d := newTestDiagnostician(t, server.URL)
+	err := d.Ping(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error from Ping on HTTP 200, got: %v", err)
+	}
+}
+
+func TestOpenRouterDiagnostician_Ping_Unauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid api key"}`))
+	}))
+	defer server.Close()
+
+	d := newTestDiagnostician(t, server.URL)
+	err := d.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected non-nil error from Ping on HTTP 401, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected error to contain \"401\", got: %v", err)
+	}
+}
+
+func TestOpenRouterDiagnostician_Ping_SendsCorrectHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-api-key" {
+			http.Error(w, "missing or wrong authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		var req chatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad body", http.StatusBadRequest)
+			return
+		}
+		if req.MaxTokens != 10 {
+			http.Error(w, "expected max_tokens=10", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(makeChatResponse("ok", 5, 1, 6))
+	}))
+	defer server.Close()
+
+	d := newTestDiagnostician(t, server.URL)
+	err := d.Ping(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error from Ping with correct headers, got: %v", err)
+	}
+}
+
 func TestOpenRouterDiagnostician_CodeFenceStripping(t *testing.T) {
 	diagJSON := `{
 		"failure_type": "OOMKilled",

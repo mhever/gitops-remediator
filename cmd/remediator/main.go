@@ -96,13 +96,35 @@ func main() {
 		}
 	}()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	setup := buildK8sSetup(cfg)
+
+	// Verify OpenRouter connectivity before starting the event loop.
+	if pinger, ok := setup.diag.(diagnostician.Pinger); ok {
+		pingCtx, pingCancel := context.WithTimeout(ctx, 15*time.Second)
+		defer pingCancel()
+		if err := pinger.Ping(pingCtx); err != nil {
+			slog.Warn("OpenRouter connectivity check failed — remediation will not work until this is resolved",
+				"error", err)
+		} else {
+			slog.Info("OpenRouter connectivity check passed")
+		}
+	}
 
 	p := patcher.NewManifestPatcher()
 	g := gitops.NewGitHubGitOps(cfg.GitOpsRepo, cfg.GitHubToken, p, slog.Default())
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
+	// Verify GitHub connectivity and repository access before starting the event loop.
+	ghPingCtx, ghPingCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer ghPingCancel()
+	if err := g.Ping(ghPingCtx); err != nil {
+		slog.Warn("GitHub connectivity check failed — PR creation will not work until this is resolved",
+			"error", err)
+	} else {
+		slog.Info("GitHub connectivity check passed", "repo", cfg.GitOpsRepo)
+	}
 
 	var pipelineWg sync.WaitGroup
 	if setup.isLive {

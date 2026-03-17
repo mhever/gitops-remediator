@@ -30,6 +30,11 @@ type Diagnostician interface {
 	Diagnose(ctx context.Context, bundle collector.DiagnosticBundle) (*Diagnosis, error)
 }
 
+// Pinger can perform a lightweight connectivity check against the LLM API.
+type Pinger interface {
+	Ping(ctx context.Context) error
+}
+
 // NoopDiagnostician satisfies Diagnostician without doing anything.
 type NoopDiagnostician struct{}
 
@@ -70,6 +75,50 @@ func NewOpenRouterDiagnostician(apiKey, logPath string, httpClient *http.Client,
 }
 
 var _ Diagnostician = (*OpenRouterDiagnostician)(nil)
+var _ Pinger = (*OpenRouterDiagnostician)(nil)
+
+// Ping sends a minimal request to OpenRouter to verify connectivity and API key validity.
+// It is intended to be called once on startup. Returns nil on success.
+func (d *OpenRouterDiagnostician) Ping(ctx context.Context) error {
+	reqBody := chatRequest{
+		Model:     d.model,
+		MaxTokens: 10,
+		Messages: []chatMessage{
+			{Role: "user", Content: "Reply with the single word ok."},
+		},
+	}
+
+	reqBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("ping: marshal request: %w", err)
+	}
+
+	url := d.baseURL + "/chat/completions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBytes))
+	if err != nil {
+		return fmt.Errorf("ping: build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+d.apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/mhever/gitops-remediator")
+	httpReq.Header.Set("X-Title", "gitops-remediator")
+
+	httpResp, err := d.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("ping: http request: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	body, _ := io.ReadAll(httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		snippet := body
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		return fmt.Errorf("ping: unexpected status %d: %s", httpResp.StatusCode, string(snippet))
+	}
+	return nil
+}
 
 // Diagnose sends the bundle to DeepSeek R1 via OpenRouter and returns a structured Diagnosis.
 // It logs the full prompt and response to logPath before returning.

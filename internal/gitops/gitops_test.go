@@ -230,6 +230,92 @@ func TestGitHubGitOps_GitHubAPIError(t *testing.T) {
 	}
 }
 
+func TestGitHubGitOps_Ping_Success(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"full_name":"owner/testrepo"}`)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	g.baseGitHubURL = ts.URL
+
+	if err := g.Ping(context.Background()); err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+func TestGitHubGitOps_Ping_Unauthorized(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, `{"message":"Bad credentials"}`)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	g.baseGitHubURL = ts.URL
+
+	err := g.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected non-nil error, got nil")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected error to contain '401', got: %v", err)
+	}
+}
+
+func TestGitHubGitOps_Ping_NotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, `{"message":"Not Found"}`)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	g.baseGitHubURL = ts.URL
+
+	err := g.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected non-nil error, got nil")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("expected error to contain '404', got: %v", err)
+	}
+}
+
+func TestGitHubGitOps_Ping_ChecksAuthHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "token test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprintf(w, `{"message":"Bad credentials"}`)
+			return
+		}
+		if r.URL.Path != "/repos/owner/testrepo" {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, `{"message":"Not Found"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"full_name":"owner/testrepo"}`)
+	}))
+	defer ts.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	g := NewGitHubGitOps("owner/testrepo", "test-token", patcher.NewManifestPatcher(), logger)
+	g.baseGitHubURL = ts.URL
+
+	if err := g.Ping(context.Background()); err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
 // errorPatcher always returns an error.
 type errorPatcher struct{}
 
