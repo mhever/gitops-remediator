@@ -8,14 +8,16 @@ import (
 	"strings"
 )
 
-// applyMemoryLimit finds the memory limit line after a limits: block and
-// replaces it with newValue. Exits the limits block when indentation drops
-// to the same level or lower than the limits: line itself.
+// applyMemoryLimit sets the memory limit for a container in a deployment YAML.
+// It handles four representations of the resources block, in priority order:
+//
+//  1. Existing limits.memory line → update in place
+//  2. limits: block without memory: → insert memory: line into limits block
+//  3. resources: block without limits: → insert limits: + memory: block
+//  4. resources: {} (empty inline mapping) → expand to resources: limits: memory:
 //
 // When containerName is non-empty, the patch is scoped to the named container
-// block (located by "- name: <containerName>") and only the limits: block
-// within that container is modified. When containerName is empty, the first
-// limits: block in the file is patched (original first-match behaviour).
+// block. When empty, the first matching block in the file is patched.
 func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, error) {
 	lines := strings.Split(string(content), "\n")
 
@@ -23,7 +25,7 @@ func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, e
 	endIdx := len(lines)
 
 	if containerName != "" {
-		// Find the container block boundaries
+		// Find the container block boundaries.
 		inContainer := false
 		containerStart := -1
 		for i, line := range lines {
@@ -34,7 +36,6 @@ func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, e
 				continue
 			}
 			if inContainer {
-				// Stop at the next container entry
 				if strings.HasPrefix(trimmed, "- name:") {
 					startIdx = containerStart
 					endIdx = i
@@ -47,14 +48,16 @@ func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, e
 			return nil, fmt.Errorf("applyMemoryLimit: container %q not found", containerName)
 		}
 		if inContainer {
-			// Container block extends to end of file
 			startIdx = containerStart
 			endIdx = len(lines)
 		}
 	}
 
+	// Case 1 & 2: scan for a limits: block and update or insert memory:.
+	limitsLine := -1
 	limitsIndent := -1
 	inLimits := false
+	memoryFound := false
 	for i := startIdx; i < endIdx; i++ {
 		line := lines[i]
 		if line == "" {
@@ -64,24 +67,149 @@ func applyMemoryLimit(content []byte, containerName, newValue string) ([]byte, e
 		indent := len(line) - len(strings.TrimLeft(line, " "))
 
 		if trimmed == "limits:" {
+			limitsLine = i
 			limitsIndent = indent
 			inLimits = true
 			continue
 		}
 		if inLimits {
-			// Exit limits block if indentation drops to limits level or less
 			if indent <= limitsIndent && trimmed != "" {
-				inLimits = false
-				continue
+				// Exited limits block without finding memory: — insert it.
+				// Insert before the line that caused the exit.
+				fieldIndent := strings.Repeat(" ", limitsIndent+2)
+				newLine := fieldIndent + "memory: " + newValue
+				result := make([]string, 0, len(lines)+1)
+				result = append(result, lines[:i]...)
+				result = append(result, newLine)
+				result = append(result, lines[i:]...)
+				return []byte(strings.Join(result, "\n")), nil
 			}
 			if strings.HasPrefix(trimmed, "memory:") {
+				// Case 1: update existing memory: line.
 				parts := strings.SplitN(line, ":", 2)
 				lines[i] = parts[0] + ": " + newValue
+				memoryFound = true
 				return []byte(strings.Join(lines, "\n")), nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("applyMemoryLimit: limits: block not found or has no memory: line")
+	if inLimits && !memoryFound {
+		// limits: was the last block in the search range — append memory:.
+		fieldIndent := strings.Repeat(" ", limitsIndent+2)
+		newLine := fieldIndent + "memory: " + newValue
+		result := make([]string, 0, len(lines)+1)
+		result = append(result, lines[:endIdx]...)
+		result = append(result, newLine)
+		result = append(result, lines[endIdx:]...)
+		return []byte(strings.Join(result, "\n")), nil
+	}
+	if limitsLine >= 0 {
+		// Should not reach here; handled above.
+		return nil, fmt.Errorf("applyMemoryLimit: limits: found but memory: insertion failed")
+	}
+
+	// Case 3: resources: block present but no limits: — scan for resources:
+	// and insert a limits: + memory: block after it.
+	for i := startIdx; i < endIdx; i++ {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		// Case 4: resources: {} (empty inline map) — replace the entire line.
+		if trimmed == "resources: {}" {
+			indentStr := strings.Repeat(" ", indent)
+			replacement := []string{
+				indentStr + "resources:",
+				indentStr + "  limits:",
+				indentStr + "    memory: " + newValue,
+			}
+			result := make([]string, 0, len(lines)+2)
+			result = append(result, lines[:i]...)
+			result = append(result, replacement...)
+			result = append(result, lines[i+1:]...)
+			return []byte(strings.Join(result, "\n")), nil
+		}
+
+		// Case 3: resources: as a block key (multi-line).
+		if trimmed == "resources:" {
+			indentStr := strings.Repeat(" ", indent+2)
+			insertion := []string{
+				indentStr + "limits:",
+				indentStr + "  memory: " + newValue,
+			}
+			result := make([]string, 0, len(lines)+2)
+			result = append(result, lines[:i+1]...)
+			result = append(result, insertion...)
+			result = append(result, lines[i+1:]...)
+			return []byte(strings.Join(result, "\n")), nil
+		}
+	}
+
+	// Case 5: no resources block at all — find the container block and append
+	// a resources: limits: memory: block at the end of its field list.
+	containerStart := -1
+	dashIndent := -1
+	for i := startIdx; i < endIdx; i++ {
+		line := lines[i]
+		if line == "" {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+
+		if containerStart == -1 {
+			if containerName != "" {
+				if trimmed == "- name: "+containerName {
+					containerStart = i
+					dashIndent = indent
+				}
+			} else {
+				// No container name specified: use the first list entry found.
+				if strings.HasPrefix(trimmed, "- name:") {
+					containerStart = i
+					dashIndent = indent
+				}
+			}
+			continue
+		}
+
+		// We are inside the container block. It ends when indentation drops
+		// back to the dash level (next container or end of containers list).
+		if indent <= dashIndent && trimmed != "" {
+			// Insert resources block before the line that ends this container.
+			fieldIndent := strings.Repeat(" ", dashIndent+2)
+			insertion := []string{
+				fieldIndent + "resources:",
+				fieldIndent + "  limits:",
+				fieldIndent + "    memory: " + newValue,
+			}
+			result := make([]string, 0, len(lines)+3)
+			result = append(result, lines[:i]...)
+			result = append(result, insertion...)
+			result = append(result, lines[i:]...)
+			return []byte(strings.Join(result, "\n")), nil
+		}
+	}
+
+	if containerStart >= 0 {
+		// Container block extends to end of search range — append resources block.
+		fieldIndent := strings.Repeat(" ", dashIndent+2)
+		insertion := []string{
+			fieldIndent + "resources:",
+			fieldIndent + "  limits:",
+			fieldIndent + "    memory: " + newValue,
+		}
+		result := make([]string, 0, len(lines)+3)
+		result = append(result, lines[:endIdx]...)
+		result = append(result, insertion...)
+		result = append(result, lines[endIdx:]...)
+		return []byte(strings.Join(result, "\n")), nil
+	}
+
+	return nil, fmt.Errorf("applyMemoryLimit: no container or resources block found in manifest (container %q)", containerName)
 }
 
 // applyEnvVar finds an env var by key and replaces its value.

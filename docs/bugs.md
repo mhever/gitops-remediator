@@ -87,6 +87,12 @@ Chronological log of bugs found and fixed during development and live testing.
 
 ---
 
+### applyMemoryLimit could not patch deployments with missing resources block
+**Bug:** `applyMemoryLimit` only handled the case where a `limits:` block with a `memory:` field already existed in the deployment YAML. Real-world Kustomize base deployments commonly omit the `resources:` block entirely (or use `resources: {}`), causing the patcher to fail with "limits: block not found or has no memory: line". Four cases were unhandled: `resources: {}` (empty inline map), `resources:` without `limits:`, `limits:` without `memory:`, and no `resources:` block at all (the actual state of `k8s/base/app/deployment.yaml` in `mhever/sample-app`).
+**Fix:** Extended `applyMemoryLimit` to handle all cases in priority order: update existing `memory:`, insert `memory:` into existing `limits:`, expand `resources: {}`, insert `limits: memory:` into `resources:` block, and finally find the container and append a full `resources: limits: memory:` block. Added five new unit tests covering each case.
+
+---
+
 ### Previous image detection used wrong ordering key — rollback RS sorted last
 **Bug:** `previousImage` sorted candidate ReplicaSets by `creationTimestamp` descending. When `kubectl set image` reverts to a previously-used image tag, Kubernetes **reuses the existing RS** for that tag rather than creating a new one — it only updates the `deployment.kubernetes.io/revision` annotation. The reused RS therefore keeps its original (old) `creationTimestamp`, so it sorts to the end of the list. The most recently-created-but-now-superseded bad RS sorts higher, and its tag gets proposed as the rollback hint. In the live test sequence (`sha-good` → `does-nut-exist` → rollback to `sha-good` → `does-nutz-exist`), PR #6 proposed `does-nut-exist` instead of `sha-good`.
 **Fix:** Sort by the `deployment.kubernetes.io/revision` annotation (parsed as int64) instead of `creationTimestamp`. Kubernetes always increments this counter on every rollout, including rollbacks, so it correctly reflects the activation order regardless of when the RS object was created. Added `rsRevision` helper function. Added regression test `TestCollect_PreviousImageRollbackReuse` with a three-RS scenario where the correct RS has the oldest creationTimestamp but the highest revision.

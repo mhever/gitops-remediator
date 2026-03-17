@@ -190,6 +190,154 @@ func TestDeploymentName(t *testing.T) {
 	}
 }
 
+func TestApplyMemoryLimit_ResourcesEmptyInline(t *testing.T) {
+	// Reproduces the real sample-app case: base deployment has `resources: {}`
+	// because limits are not defined in the Kustomize base.
+	input := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: sample-app
+        image: ghcr.io/mhever/sample-app:sha-abc123
+        resources: {}
+`)
+	result, err := applyMemoryLimit(input, "sample-app", "256Mi")
+	if err != nil {
+		t.Fatalf("applyMemoryLimit: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "resources: {}") {
+		t.Errorf("expected 'resources: {}' to be expanded, got:\n%s", out)
+	}
+}
+
+func TestApplyMemoryLimit_ResourcesBlockNoLimits(t *testing.T) {
+	// resources: block exists with requests but no limits: — insert limits block.
+	input := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 100m
+`)
+	result, err := applyMemoryLimit(input, "app", "256Mi")
+	if err != nil {
+		t.Fatalf("applyMemoryLimit: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "limits:") {
+		t.Errorf("expected 'limits:' to be inserted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' in output, got:\n%s", out)
+	}
+	// requests must be preserved
+	if !strings.Contains(out, "memory: 64Mi") {
+		t.Errorf("expected requests 'memory: 64Mi' preserved, got:\n%s", out)
+	}
+}
+
+func TestApplyMemoryLimit_LimitsBlockNoMemory(t *testing.T) {
+	// limits: block exists but only has cpu: — insert memory: line.
+	input := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: app
+        resources:
+          limits:
+            cpu: 200m
+`)
+	result, err := applyMemoryLimit(input, "app", "256Mi")
+	if err != nil {
+		t.Fatalf("applyMemoryLimit: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' inserted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cpu: 200m") {
+		t.Errorf("expected 'cpu: 200m' preserved, got:\n%s", out)
+	}
+}
+
+func TestApplyMemoryLimit_NoResourcesBlock(t *testing.T) {
+	// Reproduces the real sample-app base deployment: no resources block at all.
+	// applyMemoryLimit must insert a complete resources: limits: memory: block.
+	input := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: sample-app
+        image: ghcr.io/mhever/sample-app:sha-abc123
+        ports:
+        - containerPort: 8080
+`)
+	result, err := applyMemoryLimit(input, "sample-app", "256Mi")
+	if err != nil {
+		t.Fatalf("applyMemoryLimit: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "resources:") {
+		t.Errorf("expected 'resources:' inserted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "limits:") {
+		t.Errorf("expected 'limits:' inserted, got:\n%s", out)
+	}
+	if !strings.Contains(out, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' inserted, got:\n%s", out)
+	}
+	// Existing fields must be preserved.
+	if !strings.Contains(out, "containerPort: 8080") {
+		t.Errorf("expected 'containerPort: 8080' preserved, got:\n%s", out)
+	}
+}
+
+func TestApplyMemoryLimit_NoResourcesBlock_EmptyContainerName(t *testing.T) {
+	// Same as above but with empty containerName — must patch the first container.
+	input := []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-app
+spec:
+  template:
+    spec:
+      containers:
+      - name: sample-app
+        image: ghcr.io/mhever/sample-app:sha-abc123
+`)
+	result, err := applyMemoryLimit(input, "", "256Mi")
+	if err != nil {
+		t.Fatalf("applyMemoryLimit: %v", err)
+	}
+	out := string(result)
+	if !strings.Contains(out, "memory: 256Mi") {
+		t.Errorf("expected 'memory: 256Mi' inserted, got:\n%s", out)
+	}
+}
+
 func TestApplyMemoryLimit_WithExtraLimitsFields(t *testing.T) {
 	// Verify applyMemoryLimit works when limits: block contains extra fields
 	// like ephemeral-storage (regression for MAJOR #4).

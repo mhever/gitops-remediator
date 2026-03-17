@@ -106,7 +106,9 @@ Key fields on the `failure event detected` line:
 
 **diagLog path:** When running locally, `/var/log/remediator/diagnostician.log` may not exist. The remediator attempts to create the directory at startup (`os.MkdirAll`). If that fails (e.g. on a read-only system path), it logs a single WARN at startup and disables prompt/response logging for the session — the pipeline completes successfully regardless. To capture logs locally, set `DIAGNOSTICIAN_LOG_PATH=/tmp/remediator-diagnostician.log`.
 
-**Image tag hallucination:** For `ImagePullBackOff` the LLM cannot know which tags are valid in the registry. It invents a plausible-sounding tag (e.g. `v1.2.3`). The PR is structurally correct but the proposed tag must be manually verified before merging. A future improvement would include the previously-running tag in the diagnostic bundle so the LLM can propose a rollback rather than a guess.
+**Image tag for `ImagePullBackOff`:** The diagnostic bundle now includes a `PREVIOUS IMAGE` section showing the last known-good image tag from ReplicaSet history (sorted by `deployment.kubernetes.io/revision`). The LLM is instructed to prefer this tag. The PR body includes a `[!WARNING]` callout noting that the tag should be verified before merging. If no previous RS exists, the LLM falls back to inference.
+
+**Memory limit for `OOMKilled`:** The LLM proposes a new memory limit based on the pod's container status and event logs. It has no knowledge of the application's actual memory footprint, so the proposed value is a heuristic. Review the PR and adjust before merging if needed.
 
 ---
 
@@ -144,3 +146,35 @@ kubectl set image deployment/sample-app \
 - LLM correctly identified the failure type and root cause
 - Proposed image tag (`v1.2.3`) was hallucinated — not a real tag in the registry (see Known behaviours above)
 - Duplicate event fired; second event detected while first PR was already open — both issues subsequently fixed (branch existence check, diagLog directory creation)
+
+---
+
+### 2026-03-17 — OOMKilled (first live run)
+
+**Trigger command:**
+```bash
+kubectl patch deployment sample-app -n remediator-test \
+  --patch '{"spec":{"template":{"spec":{"containers":[{"name":"sample-app","resources":{"limits":{"memory":"1Mi"}}}]}}}}'
+```
+
+**Relevant log output:**
+```json
+{"time":"2026-03-17T21:09:29Z","level":"INFO","msg":"failure event detected","type":"CrashLoopBackOff","namespace":"remediator-test","pod":"sample-app-55dd5998f9-8msrz","container":"","reason":"BackOff"}
+{"time":"2026-03-17T21:10:39Z","level":"INFO","msg":"remediation PR opened","url":"https://github.com/mhever/sample-app/pull/7","pod":"sample-app-55dd5998f9-8msrz","type":"OOMKilled"}
+```
+
+**Time to PR:** ~70 seconds from event to PR (container had to OOMKill and enter CrashLoopBackOff first).
+
+**PR:** [mhever/sample-app#7](https://github.com/mhever/sample-app/pull/7)
+
+**PR contents:**
+- Title: `fix: auto-remediate OOMKilled for sample-app-55dd5998f9-8msrz`
+- Root cause: memory limit set too low (1Mi), causing OOM kill during container init
+- Patch: inserted `resources: limits: memory: 128Mi` into `k8s/base/app/deployment.yaml` (base had no resources block)
+- Agent reasoning: event logs show container init OOM-killed due to 1Mi memory limit
+
+**Observations:**
+- Watcher classified the event as `CrashLoopBackOff` (pod had restarted before being caught), but the LLM correctly identified the underlying cause as `OOMKilled` from the container status
+- Patcher required two bug fixes to reach this point: `resources: {}` expansion and no-resources-block insertion
+- Proposed 128Mi limit — reasonable conservative value; LLM has no knowledge of actual application memory footprint
+- PR merged by user
