@@ -8,8 +8,9 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning,omitempty"`
 }
 
 // chatResponse is the response from the OpenRouter chat completions API.

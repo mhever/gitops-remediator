@@ -25,6 +25,10 @@ type Diagnosis struct {
 	PatchType        string `json:"patch_type,omitempty"`
 	PatchValue       string `json:"patch_value,omitempty"`
 	ReasoningSummary string `json:"reasoning_summary"`
+	// ThinkingContent holds DeepSeek R1's raw chain-of-thought from the
+	// reasoning_content field returned by OpenRouter. It is not part of the
+	// LLM's JSON output — it is extracted separately from the API response.
+	ThinkingContent string `json:"-"`
 }
 
 // Diagnostician sends a DiagnosticBundle to an LLM via OpenRouter and returns a Diagnosis.
@@ -198,11 +202,13 @@ func (d *OpenRouterDiagnostician) Diagnose(ctx context.Context, bundle collector
 		return nil, fmt.Errorf("diagnostician: unmarshal chat response: %w", err)
 	}
 
+
 	if len(chatResp.Choices) == 0 {
 		return nil, fmt.Errorf("diagnostician: no choices in response")
 	}
 
 	rawJSON := chatResp.Choices[0].Message.Content
+	thinkingContent := chatResp.Choices[0].Message.ReasoningContent
 
 	tokensStr := fmt.Sprintf("prompt=%d completion=%d total=%d",
 		chatResp.Usage.PromptTokens,
@@ -210,6 +216,9 @@ func (d *OpenRouterDiagnostician) Diagnose(ctx context.Context, bundle collector
 		chatResp.Usage.TotalTokens,
 	)
 	d.diagLog("RESPONSE", rawJSON, tokensStr)
+	if thinkingContent != "" {
+		d.diagLog("THINKING", thinkingContent, "")
+	}
 
 	// Strip code fences and extract the JSON object
 	stripped := strings.TrimSpace(rawJSON)
@@ -223,6 +232,7 @@ func (d *OpenRouterDiagnostician) Diagnose(ctx context.Context, bundle collector
 	if err := json.Unmarshal([]byte(stripped), &diagnosis); err != nil {
 		return nil, fmt.Errorf("diagnostician: unmarshal diagnosis JSON: %w", err)
 	}
+	diagnosis.ThinkingContent = thinkingContent
 
 	if !diagnosis.Remediable {
 		d.logger.Warn("diagnosis: escalating non-remediable failure",

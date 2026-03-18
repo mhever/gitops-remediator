@@ -73,6 +73,7 @@ func buildPRBody(req PRRequest, diff string) string {
 **Proposed fix:** %s changed to %s
 
 ### Agent Reasoning
+
 %s`,
 		req.Diag.FailureType,
 		req.Event.PodName,
@@ -82,6 +83,17 @@ func buildPRBody(req PRRequest, diff string) string {
 		req.Diag.PatchValue,
 		req.Diag.ReasoningSummary,
 	)
+
+	if req.Diag.ThinkingContent != "" {
+		body += fmt.Sprintf(`
+
+<details>
+<summary>🧠 DeepSeek R1 chain-of-thought reasoning</summary>
+
+%s
+
+</details>`, req.Diag.ThinkingContent)
+	}
 
 	if req.Diag.PatchType == "image_tag" {
 		body += `
