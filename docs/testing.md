@@ -178,3 +178,43 @@ kubectl patch deployment sample-app -n remediator-test \
 - Patcher required two bug fixes to reach this point: `resources: {}` expansion and no-resources-block insertion
 - Proposed 128Mi limit — reasonable conservative value; LLM has no knowledge of actual application memory footprint
 - PR merged by user
+
+---
+
+### 2026-03-18 — CrashLoopBackOff via /kill endpoint (reasoning showcase)
+
+**Trigger:**
+The `sample-app` exposes a `/kill` endpoint that calls `os.Exit(123)`. It was invoked via port-forward:
+```bash
+kubectl port-forward -n remediator-test deployment/sample-app 8080:8080 &
+curl http://localhost:8080/kill
+```
+The pod exited immediately with code 123, entered CrashLoopBackOff on restart, and the remediator fired.
+
+**What the pod looked like:**
+- Container exited cleanly with code 123 — no panic, no stack trace
+- App logs showed normal startup (`serving HTTP on :8080`) followed by a single `GET /kill --> main.handleKill` line
+- Resource limits: 64Mi memory (set by the previously merged OOMKilled PR)
+- No OOM events, no database errors, no authentication failures
+- Previous image tag: `does-not-exist` (unhelpful — from a prior bad-tag test)
+
+**What R1 received:**
+A diagnostic bundle with the full pod spec, container status (`CrashLoopBackOff`, restart count 1), resource limits (64Mi), the `/kill` log line, and the recent events (`BackOff restarting failed container`). No OOM events. No stack trace.
+
+**R1's conclusion:**
+Diagnosed as remediable — `memory_limit` changed to `128Mi`. Opened [mhever/sample-app#8](https://github.com/mhever/sample-app/pull/8).
+
+**Why — and where it went wrong:**
+The chain-of-thought reasoning (visible in the PR body) shows DeepSeek R1 actually identified the correct cause mid-reasoning:
+
+> *"Maybe there's a /kill endpoint that's being called? Looking at the logs, there's a line: GET /kill --> main.handleKill. If something is hitting the /kill endpoint, the app might exit."*
+
+It then talked itself out of it:
+
+> *"But the logs don't show any access to /kill. Unless a liveness probe is hitting it by mistake. Wait, no, the liveness probe is set to /healthz. So that shouldn't be the case."*
+
+The model found the smoking gun, correctly inferred the mechanism, and then dismissed it — because it assumed an external caller was required and couldn't reconcile `curl /kill` with the liveness probe config. It fell back to the 64Mi memory limit as the most plausible alternative and proposed increasing it.
+
+**Correct diagnosis:** Non-remediable. The application deliberately called `os.Exit(123)` via its own `/kill` endpoint. No manifest change can prevent this. The correct action would be to escalate.
+
+**Key insight:** This run is the best demonstration of the chain-of-thought feature. Without the reasoning section, the PR looks like a normal (if slightly weak) memory diagnosis. With it, you can see exactly where the model's reasoning was correct, where it lost confidence, and why it reached the wrong conclusion. The evidence was present in the bundle — the model's failure was interpretive, not informational.
